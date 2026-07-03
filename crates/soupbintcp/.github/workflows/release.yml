@@ -6,7 +6,7 @@ on:
 
 jobs:
   release:
-    uses: 0x67/ci/.github/workflows/release.yml@main
+    uses: polaris-trade/ci/.github/workflows/release.yml@main
     with:
       publish: false
     secrets:

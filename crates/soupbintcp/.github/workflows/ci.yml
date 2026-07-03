@@ -7,4 +7,4 @@ on:
 
 jobs:
   rust:
-    uses: 0x67/ci/.github/workflows/rust-ci.yml@main
+    uses: polaris-trade/ci/.github/workflows/rust-ci.yml@main
