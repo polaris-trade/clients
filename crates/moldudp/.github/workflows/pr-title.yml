@@ -6,4 +6,4 @@ on:
 
 jobs:
   lint:
-    uses: 0x67/ci/.github/workflows/pr-title.yml@main
+    uses: polaris-trade/ci/.github/workflows/pr-title.yml@main
