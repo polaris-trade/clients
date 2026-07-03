@@ -42,6 +42,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "client_soupbintcp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "flate2",
+ "humantime-serde",
+ "mockall",
+ "parking_lot",
+ "rstest",
+ "serde",
+ "thiserror",
+ "tokio",
+ "transport_core",
+ "transport_tokio",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -471,23 +488,6 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "soupbintcp"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "flate2",
- "humantime-serde",
- "mockall",
- "parking_lot",
- "rstest",
- "serde",
- "thiserror",
- "tokio",
- "transport_core",
- "transport_tokio",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [package]
-name = "soupbintcp"
+name = "client_soupbintcp"
 description = "SoupBinTCP v3.0 client with wire codec, session state, heartbeats, and compressed variant"
 version = "0.1.0"
 edition.workspace = true
