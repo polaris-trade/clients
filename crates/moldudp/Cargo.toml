@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96.0"
+authors = ["0x67 <69191110+0x67@users.noreply.github.com>"]
+repository = "https://github.com/0x67/moldudp"
+homepage = "https://github.com/0x67"
+license = "MIT"
+
+[workspace.dependencies]
+transport_core = { path = "../transport-core/crates/transport_core" }
+transport_tokio = { path = "../transport-tokio/crates/transport_tokio" }
+
+thiserror = "2.0.18"
+mockall = "0.15"
+rstest = "0.26.1"
+tracing = "0.1.44"
+bytes = "1.10.1"
+serde = { version = "1.0.228", features = ["derive"] }
+humantime-serde = "1.1.1"
+parking_lot = "0.12.4"
+smallvec = { version = "1.13.2", features = ["const_generics"] }
+bitvec = "1.0.1"
+
+# dev-only
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "net", "time"] }
+allocation-counter = "0.8.1"
