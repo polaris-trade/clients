@@ -12,8 +12,18 @@ git_tag_name = "{{ package }}-v{{ version }}"
 git_release_enable = true
 git_release_name = "{{ package }} v{{ version }}"
 
-# Do NOT publish to crates.io by default. Caller workflow gates this via input.
-publish = false
+# Scoped title so the workspace `pr-title` gate accepts it and the release
+# workflow can key its `release` job off the "chore(release)" prefix.
+pr_name = "chore(release): v{{ version }}"
+
+# Publish to the Kellnr registry named in Cargo.toml `[package] publish = ["polaris"]`.
+# Caller workflow gates this via input. release-plz has no `registry` config key;
+# the target registry comes from the crate's `publish` allowlist, not from here.
+publish = true
+
+# Registry-based version tracking via Kellnr. release-plz queries the
+# `polaris` registry for the last released version, so git_only stays off.
+git_only = false
 
 # Semver bump inference from Conventional Commits.
 #   feat!  or  BREAKING CHANGE  -> major
@@ -46,11 +56,19 @@ body = """
 - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
     {{ commit.message | upper_first }}\
     {% if commit.links %} ({% for link in commit.links %}[{{ link.text }}]({{ link.href }}){% if not loop.last %}, {% endif %}{% endfor %}){% endif %}
+{%- set parts = commit.raw_message | trim | split(pat="\n\n") %}
+{%- if parts | length > 1 %}
+{% set raw = parts | slice(start=1) | join(sep="\n\n") | replace(from="\n", to="\n  ") %}
+{% set body = "  " ~ raw %}
+{{ body }}
+{%- endif %}
 {% endfor %}
 {% endfor %}
 """
 
 commit_parsers = [
+  # Manual CHANGELOG fixes: keep out of next release.
+  { message = "^docs\\(changelog\\)", skip = true },
     { message = "^feat",     group = "Features" },
     { message = "^fix",      group = "Bug fixes" },
     { message = "^perf",     group = "Performance" },
@@ -64,6 +82,4 @@ commit_parsers = [
     { message = "^revert",   group = "Reverts" },
 ]
 
-# Skip merge commits.
-filter_commits = true
 

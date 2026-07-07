@@ -43,3 +43,11 @@ perf.data*
 
 # Internal spec file
 /specs
+
+# Vendor protocol specs (NASDAQ, not redistributed - see README)
+/docs
+# lefthook local override
+lefthook-local.yml
+
+# release-plz generate-schema output (editor autocomplete only)
+.schema/

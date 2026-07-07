@@ -116,6 +116,10 @@ clean:
 lat-check:
     lat check
 
+# Install local git hooks (lefthook.yml). Run once per clone.
+hooks:
+    lefthook install
+
 # Update rust-toolchain.toml to a new MSRV. Usage: just msrv 1.98.0
 msrv VERSION:
     sed -i.bak -E 's/^(\s*channel\s*=\s*)"[^"]+"/\1""/' rust-toolchain.toml
