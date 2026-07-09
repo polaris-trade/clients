@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.2.2](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.1...client_moldudp-v0.2.2) (2026-07-09)
+
+
+### Tests
+
+* **client-moldudp:** prove zero-alloc recv, owned handoff, pool-size guard ([#6](https://github.com/polaris-trade/client-moldudp/issues/6)) ([1de022f](https://github.com/polaris-trade/client-moldudp/commit/1de022f92a812900f1829df69a6f83813472a1e2))
+
 ## [0.2.1](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.0...client_moldudp-v0.2.1) (2026-07-09)
 
 
