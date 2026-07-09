@@ -1,7 +1,7 @@
 [package]
 name = "client_moldudp"
 description = "MoldUDP64 client: wire codec, sequence reassembler, gap request handler, A/B arbiter, receiver"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.96.1"
 authors = ["0x67 <69191110+0x67@users.noreply.github.com>"]
