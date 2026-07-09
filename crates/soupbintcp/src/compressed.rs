@@ -23,7 +23,7 @@ impl CompressedReader {
     }
 
     /// Inflates `compressed` and returns the decoded bytes produced by this call.
-    /// Valid only until the next `feed` call, same as `Transport::next_frame`.
+    /// Valid only until the next `feed` call.
     pub fn feed(&mut self, compressed: &[u8]) -> Result<&[u8], SoupBinError> {
         self.inflated.clear();
         let mut scratch = Vec::with_capacity(self.inflated.capacity().max(4096));

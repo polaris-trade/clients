@@ -1,6 +1,6 @@
 # SoupBinTCP Client
 
-SoupBinTCP v3.0 session protocol client: wire codec, login/heartbeat/logout state machine, and an optional NASDAQ compressed-feed variant, generic over any `transport_core::Transport` backend.
+SoupBinTCP v3.0 session protocol client: wire codec, login/heartbeat/logout state machine, and an optional NASDAQ compressed-feed variant, generic over any `transport_core::StreamSource` + `AsyncReady` backend.
 
 ## Wire codec
 
@@ -12,11 +12,19 @@ See [[src/wire.rs#PacketType]], [[src/wire.rs#parse_packet]].
 
 ## Client state machine and login
 
-`SoupBinClient<T: Transport>` drives one session over an already-connected transport, from login through streaming.
+`SoupBinClient<T: StreamSource + AsyncReady>` drives one session over an already-connected transport, from login through streaming.
 
 `connect` sends `Login Request`, awaits `Login Accepted` / `Login Rejected` / timeout, then transitions Disconnected -> Authenticating -> Streaming. Sequenced data increments an internal counter (seeded from the login response) so reconnect can request the right resume point via `next_expected_sequence`.
 
 See [[src/client.rs#SoupBinClient]], [[src/frame.rs#Frame]].
+
+## One-landing stream ingest
+
+Bytes come off the wire via `StreamSource::recv_into`, not a resident transport buffer, so `ingest_transport_frame` owns exactly where each byte lands.
+
+Uncompressed: reserves `decode_buf_capacity` spare bytes on `decode_buf` then lands `recv_into` straight into that spare region (`advance_mut` marks the exact count init), one copy, no intermediate buffer, and `decode_buf`'s own `BytesMut::split_to` framing downstream stays refcount-free. The `reserve` before `spare_capacity_mut` is load-bearing: `take_one_packet`'s `split_to` permanently shrinks spare capacity, so skipping it starves `recv_into` to a zero-length slice over repeated packets. Compressed (`compressed` feature): `recv_into` still lands once, but into a separate `recv_staging` buffer first, since `inflate.feed` needs a contiguous compressed frame; the inflate step then copies decoded bytes into `decode_buf`, an unavoidable second copy that the uncompressed path skips.
+
+See [[src/client.rs#SoupBinClient]].
 
 ## Heartbeat, logout, end of session
 

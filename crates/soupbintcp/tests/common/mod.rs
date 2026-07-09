@@ -4,14 +4,17 @@
 //! subset of it, so unused-per-binary warnings here are false positives.
 #![allow(dead_code)]
 
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 #[cfg(feature = "compressed")]
 use flate2::{Compress, Compression, FlushCompress};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use transport_core::{BindConfig, RecvBufConfig, RingConfig, SendBufConfig, TransportBind};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
+use transport_core::{
+    AffinityConfig, BindConfig, RecvBufConfig, RingConfig, SendBufConfig, TransportBind,
+};
 use transport_tokio::TokioTransport;
 
 pub async fn bind_listener() -> (TcpListener, SocketAddr) {
@@ -69,6 +72,7 @@ pub async fn connect_client(addr: SocketAddr) -> TokioTransport {
         RecvBufConfig::default(),
         SendBufConfig::default(),
         RingConfig::default(),
+        AffinityConfig::default(),
     )
     .await
     .expect("connect_tcp")

@@ -8,8 +8,7 @@ use std::io::Write;
 
 use client_soupbintcp::{CompressedReader, SoupBinClient};
 use common::MockServer;
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
+use flate2::{Compression, write::ZlibEncoder};
 
 fn zlib_compress(data: &[u8]) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());

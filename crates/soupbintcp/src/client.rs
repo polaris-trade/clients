@@ -1,23 +1,27 @@
-//! `SoupBinClient<T>`: session state machine over any `transport_core::Transport`.
-//! Owns login, sequenced-data delivery, heartbeats, logout, end-of-session.
-//! No backend imports here: generic over `T`, caller supplies an already-connected
-//! transport to `connect`.
+//! `SoupBinClient<T>`: session state machine over any `transport_core::StreamSource`
+//! plus `AsyncReady` backend. Owns login, sequenced-data delivery, heartbeats,
+//! logout, end-of-session. No backend imports here: generic over `T`, caller
+//! supplies an already-connected transport to `connect`.
 
-use std::future::poll_fn;
-use std::task::Poll;
-use std::time::Instant;
+use std::{
+    future::{Future, poll_fn},
+    pin::pin,
+    task::Poll,
+    time::Instant,
+};
 
-use bytes::BytesMut;
-use transport_core::{AsPayload, Transport};
+use bytes::{BufMut, BytesMut};
+use transport_core::{AsyncReady, StreamSource};
 
 #[cfg(feature = "compressed")]
 use crate::compressed::CompressedReader;
-
-use crate::config::SoupBinClientConfig;
-use crate::error::SoupBinError;
-use crate::event::{SoupBinEvent, SoupBinMessage};
-use crate::frame::Frame;
-use crate::wire::{self, PacketType};
+use crate::{
+    config::SoupBinClientConfig,
+    error::SoupBinError,
+    event::{SoupBinEvent, SoupBinMessage},
+    frame::Frame,
+    wire::{self, PacketType},
+};
 
 /// Session lifecycle stage. Streaming is the only stage where `recv` yields `Frame`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +34,7 @@ pub enum ClientState {
 
 /// SoupBinTCP v3.0 session over transport `T`. Caller connects the transport,
 /// then hands it to [`SoupBinClient::connect`] to run the login handshake.
-pub struct SoupBinClient<T: Transport> {
+pub struct SoupBinClient<T: StreamSource + AsyncReady> {
     transport: T,
     state: ClientState,
     decode_buf: BytesMut,
@@ -44,9 +48,13 @@ pub struct SoupBinClient<T: Transport> {
     cfg: SoupBinClientConfig,
     #[cfg(feature = "compressed")]
     inflate: CompressedReader,
+    // raw compressed bytes land here before inflate; inflate needs a
+    // contiguous compressed frame, so this is a second, unavoidable copy.
+    #[cfg(feature = "compressed")]
+    recv_staging: BytesMut,
 }
 
-impl<T: Transport> SoupBinClient<T> {
+impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
     /// Runs the login handshake over an already-connected `transport`.
     ///
     /// On `Login Accepted`: captures session + sequence, transitions to streaming.
@@ -74,6 +82,8 @@ impl<T: Transport> SoupBinClient<T> {
             last_recv: Instant::now(),
             #[cfg(feature = "compressed")]
             inflate: CompressedReader::new(cap),
+            #[cfg(feature = "compressed")]
+            recv_staging: BytesMut::with_capacity(cap),
             cfg,
         }
     }
@@ -235,19 +245,35 @@ impl<T: Transport> SoupBinClient<T> {
         Ok(Some((ty, payload)))
     }
 
-    /// Copies the transport's latest chunk into `decode_buf`, inflating first
-    /// under the `compressed` feature. Updates `last_recv` on any bytes seen.
+    /// Lands one `recv_into` chunk. Uncompressed: writes straight into
+    /// `decode_buf` spare capacity, one landing, no intermediate copy.
+    /// Compressed: lands into a staging buffer first (inflate needs a
+    /// contiguous compressed frame), then extends `decode_buf` with the
+    /// inflated bytes, a second unavoidable copy. Updates `last_recv` either way.
     fn ingest_transport_frame(&mut self) -> Result<(), SoupBinError> {
-        if let Some(frame) = self.transport.next_frame() {
-            let raw = frame.payload();
-            #[cfg(feature = "compressed")]
-            {
-                let inflated = self.inflate.feed(raw)?;
-                self.decode_buf.extend_from_slice(inflated);
+        #[cfg(feature = "compressed")]
+        {
+            self.recv_staging.clear();
+            self.recv_staging.reserve(self.cfg.decode_buf_capacity);
+            let spare = self.recv_staging.spare_capacity_mut();
+            let n = self.transport.recv_into(spare)?;
+            // SAFETY: recv_into returns the exact count of bytes it wrote into `spare`.
+            unsafe {
+                self.recv_staging.advance_mut(n);
             }
-            #[cfg(not(feature = "compressed"))]
-            {
-                self.decode_buf.extend_from_slice(raw);
+            let inflated = self.inflate.feed(&self.recv_staging)?;
+            self.decode_buf.extend_from_slice(inflated);
+        }
+        #[cfg(not(feature = "compressed"))]
+        {
+            // reserve before spare_capacity_mut: take_one_packet's split_to shrinks
+            // spare permanently, so a starved reserve would zero-length the slice.
+            self.decode_buf.reserve(self.cfg.decode_buf_capacity);
+            let spare = self.decode_buf.spare_capacity_mut();
+            let n = self.transport.recv_into(spare)?;
+            // SAFETY: recv_into returns the exact count of bytes it wrote into `spare`.
+            unsafe {
+                self.decode_buf.advance_mut(n);
             }
         }
         self.last_recv = Instant::now();
@@ -257,7 +283,7 @@ impl<T: Transport> SoupBinClient<T> {
     /// Blocks on the transport until bytes arrive. No deadline: heartbeat
     /// silence is caught by `tick_heartbeat`, driven by the caller's own timer.
     async fn await_more_bytes(&mut self) -> Result<(), SoupBinError> {
-        poll_fn(|cx| self.transport.poll_event(cx)).await?;
+        self.transport.ready().await?;
         self.ingest_transport_frame()
     }
 
@@ -268,21 +294,29 @@ impl<T: Transport> SoupBinClient<T> {
         &mut self,
         deadline: Instant,
     ) -> Result<(), SoupBinError> {
-        poll_fn(|cx| match self.transport.poll_event(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(SoupBinError::from(e))),
-            Poll::Pending => {
-                if Instant::now() >= deadline {
-                    Poll::Ready(Err(SoupBinError::LoginTimeout {
-                        timeout: self.cfg.login_timeout,
-                    }))
-                } else {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+        let login_timeout = self.cfg.login_timeout;
+        // scoped block: pin!'s hidden local (and the &mut self.transport borrow
+        // it holds) must drop before ingest_transport_frame borrows self again.
+        let result = {
+            let ready = self.transport.ready();
+            let mut ready = pin!(ready);
+            poll_fn(|cx| match ready.as_mut().poll(cx) {
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(SoupBinError::from(e))),
+                Poll::Pending => {
+                    if Instant::now() >= deadline {
+                        Poll::Ready(Err(SoupBinError::LoginTimeout {
+                            timeout: login_timeout,
+                        }))
+                    } else {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
                 }
-            }
-        })
-        .await?;
+            })
+            .await
+        };
+        result?;
         self.ingest_transport_frame()
     }
 
@@ -347,4 +381,101 @@ fn parse_ascii_numeric(bytes: &[u8]) -> Result<u64, SoupBinError> {
     }
     s.parse::<u64>()
         .map_err(|_| SoupBinError::ProtocolViolation(format!("bad numeric field: {s:?}")))
+}
+
+// one-landing ingest is the uncompressed branch only (see ingest_transport_frame);
+// the mock and its tests are scoped to that branch.
+#[cfg(all(test, not(feature = "compressed")))]
+mod tests {
+    use core::mem::MaybeUninit;
+
+    use transport_core::{TransportCore, TransportError};
+
+    use super::*;
+
+    /// Copies buffered bytes into the caller's `dst` on `recv_into`, tracking
+    /// the last `dst` length seen. Drives the ingest path without a socket.
+    struct MockStream {
+        pending: Vec<u8>,
+        last_dst_len: usize,
+    }
+
+    impl TransportCore for MockStream {
+        fn name(&self) -> &'static str {
+            "mock-stream"
+        }
+
+        async fn send(&mut self, _buf: &[u8]) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    impl StreamSource for MockStream {
+        fn recv_into(&mut self, dst: &mut [MaybeUninit<u8>]) -> Result<usize, TransportError> {
+            self.last_dst_len = dst.len();
+            let n = self.pending.len().min(dst.len());
+            for (slot, byte) in dst[..n].iter_mut().zip(self.pending.drain(..n)) {
+                slot.write(byte);
+            }
+            Ok(n)
+        }
+    }
+
+    impl AsyncReady for MockStream {
+        async fn ready(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ingest_lands_once_with_no_extra_allocation() {
+        let payload = b"steady-state payload, sized well under decode_buf_capacity".to_vec();
+        let transport = MockStream {
+            pending: payload.clone(),
+            last_dst_len: 0,
+        };
+        let cfg = SoupBinClientConfig {
+            decode_buf_capacity: 4096,
+            ..Default::default()
+        };
+        let mut client = SoupBinClient::from_transport(transport, cfg);
+        // warm decode_buf to steady state so ingest's own reserve() is a no-op.
+        client.decode_buf.reserve(client.cfg.decode_buf_capacity);
+
+        let info = allocation_counter::measure(|| {
+            client.ingest_transport_frame().unwrap();
+        });
+        assert_eq!(info.count_total, 0, "steady-state ingest must not allocate");
+        assert_eq!(&client.decode_buf[..], &payload[..]);
+    }
+
+    #[test]
+    fn ingest_reserve_keeps_spare_available_after_repeated_consume() {
+        // regression: skip reserve() before spare_capacity_mut() and take_one_packet's
+        // split_to eventually starves recv_into to a zero-length slice.
+        let mut pending = Vec::new();
+        for _ in 0..20 {
+            pending.extend_from_slice(b"0123456789");
+        }
+        let transport = MockStream {
+            pending,
+            last_dst_len: 0,
+        };
+        let cfg = SoupBinClientConfig {
+            decode_buf_capacity: 64,
+            ..Default::default()
+        };
+        let mut client = SoupBinClient::from_transport(transport, cfg);
+
+        for _ in 0..20 {
+            client.ingest_transport_frame().unwrap();
+            assert!(
+                client.transport.last_dst_len > 0,
+                "recv_into starved to a zero-length slice; reserve() ordering regressed"
+            );
+            // mimic take_one_packet's BytesMut::split_to consuming decode_buf's front.
+            let take = client.decode_buf.len().min(10);
+            let _ = client.decode_buf.split_to(take);
+        }
+    }
 }

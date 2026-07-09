@@ -2,6 +2,7 @@
 //! `Transport` wraps backend I/O failures via `#[from]`, rest are protocol-level.
 
 use std::time::Duration;
+
 use thiserror::Error;
 
 /// Failure kinds for SoupBinTCP session handling.
