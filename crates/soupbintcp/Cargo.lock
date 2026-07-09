@@ -37,9 +37,9 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "bytes"
-version = "1.12.0"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cfg-if"
@@ -680,6 +680,7 @@ dependencies = [
 [[package]]
 name = "transport_core"
 version = "0.3.0"
+source = "git+https://github.com/polaris-trade/transport-core?tag=transport_core-v0.3.0#d6f02e078cbef64efed152ef76171835cfa9c38d"
 dependencies = [
  "serde",
  "thiserror",
@@ -687,7 +688,8 @@ dependencies = [
 
 [[package]]
 name = "transport_tokio"
-version = "0.3.0"
+version = "0.3.2"
+source = "git+https://github.com/polaris-trade/transport-tokio?tag=transport_tokio-v0.3.2#91f84012edf177f28ef40dbc246e0dd617da2133"
 dependencies = [
  "libc",
  "parking_lot",

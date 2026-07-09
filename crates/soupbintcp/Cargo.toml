@@ -13,19 +13,19 @@ publish = false
 
 [dependencies]
 transport_core = { git = "https://github.com/polaris-trade/transport-core", tag = "transport_core-v0.3.0" }
-bytes = "1.10.1"
+bytes = "1.12.1"
 serde = { version = "1.0.228", features = ["derive"] }
 humantime-serde = "1.1.1"
 thiserror = "2.0.18"
-parking_lot = "0.12.4"
-flate2 = { version = "1.0.35", optional = true }
+parking_lot = "0.12.5"
+flate2 = { version = "1.1.9", optional = true }
 
 [features]
 default = []
 compressed = ["dep:flate2"]
 
 [dev-dependencies]
-transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.3.0" }
+transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.3.2" }
 mockall = "0.15"
 rstest = "0.26.1"
 tokio = { version = "1.52.3", features = [
