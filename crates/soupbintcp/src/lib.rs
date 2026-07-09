@@ -1,6 +1,7 @@
 //! SoupBinTCP v3.0 client crate: wire codec, `SoupBinClient` state machine, heartbeats, `compressed` feature.
 //!
-//! Generic over `transport_core::StreamSource` + `AsyncReady`; no backend imports here.
+//! Generic over `transport_core::StreamSource`; `AsyncReady` is optional, gating
+//! `connect`/`recv` only. No backend imports here.
 #[cfg(feature = "compressed")]
 pub mod compressed;
 

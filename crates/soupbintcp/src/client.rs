@@ -1,7 +1,8 @@
-//! `SoupBinClient<T>`: session state machine over any `transport_core::StreamSource`
-//! plus `AsyncReady` backend. Owns login, sequenced-data delivery, heartbeats,
-//! logout, end-of-session. No backend imports here: generic over `T`, caller
-//! supplies an already-connected transport to `connect`.
+//! `SoupBinClient<T>`: session state machine over any `transport_core::StreamSource`.
+//! `AsyncReady` is optional: it unlocks `connect`/`recv` (async login and
+//! spin-free await). Sync-only backends drive the base API instead, polling
+//! with `poll_recv`. Owns login, sequenced-data delivery, heartbeats, logout,
+//! end-of-session. No backend imports here: generic over `T`.
 
 use std::{
     future::{Future, poll_fn},
@@ -32,9 +33,24 @@ pub enum ClientState {
     Closed,
 }
 
+/// One dispatch pass over buffered packets, as owned data rather than a
+/// borrow of `self`: keeps `dispatch_buffered` safe to call more than once
+/// (with another `&mut self` call in between) from the same caller frame,
+/// which a `self`-borrowing return type would rule out. Callers turn this
+/// into a `SoupBinMessage` themselves, right at the point they return it, so
+/// the `&self.last_frame` borrow stays scoped to that one branch.
+enum PacketOutcome {
+    Data { sequence: u64 },
+    Event(SoupBinEvent),
+    NoProgress,
+}
+
 /// SoupBinTCP v3.0 session over transport `T`. Caller connects the transport,
 /// then hands it to [`SoupBinClient::connect`] to run the login handshake.
-pub struct SoupBinClient<T: StreamSource + AsyncReady> {
+///
+/// Base methods (send, heartbeat, `poll_recv`) need only `T: StreamSource`.
+/// `connect` and `recv` need `T: AsyncReady` too; see the second `impl` block.
+pub struct SoupBinClient<T: StreamSource> {
     transport: T,
     state: ClientState,
     decode_buf: BytesMut,
@@ -54,19 +70,7 @@ pub struct SoupBinClient<T: StreamSource + AsyncReady> {
     recv_staging: BytesMut,
 }
 
-impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
-    /// Runs the login handshake over an already-connected `transport`.
-    ///
-    /// On `Login Accepted`: captures session + sequence, transitions to streaming.
-    /// On `Login Rejected`: returns `LoginRejected`. On no response within
-    /// `cfg.login_timeout`: returns `LoginTimeout`. Either way the transport is
-    /// dropped with `self` on the error path, closing the socket.
-    pub async fn connect(transport: T, cfg: SoupBinClientConfig) -> Result<Self, SoupBinError> {
-        let mut client = Self::from_transport(transport, cfg);
-        client.login().await?;
-        Ok(client)
-    }
-
+impl<T: StreamSource> SoupBinClient<T> {
     fn from_transport(transport: T, cfg: SoupBinClientConfig) -> Self {
         let cap = cfg.decode_buf_capacity;
         let send_cap = cfg.max_frame_size;
@@ -103,43 +107,64 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
         self.state
     }
 
-    /// Waits for the next sequenced data frame or lifecycle event.
-    ///
-    /// Debug packets are decoded and silently dropped, never surfaced here.
-    /// After an `EndOfSession` event, further calls return `Err(EndOfSession)`.
-    pub async fn recv(&mut self) -> Result<SoupBinMessage<'_>, SoupBinError> {
+    /// Non-blocking single attempt: dispatches an already-buffered packet if
+    /// one is ready, else tries one `recv_into` and dispatches again.
+    /// `Ok(None)` means no progress this call (nothing buffered, nothing on
+    /// the wire yet); caller decides whether to spin. Debug packets decode
+    /// and drop silently, same as `recv`. For backends without `AsyncReady`;
+    /// async callers should prefer `recv` instead of spinning this.
+    pub fn poll_recv(&mut self) -> Result<Option<SoupBinMessage<'_>>, SoupBinError> {
         if self.state == ClientState::Closed {
             return Err(SoupBinError::EndOfSession);
         }
-        loop {
-            if let Some((ty, bytes)) = self.take_one_packet()? {
-                match ty {
-                    PacketType::SequencedData => {
-                        let seq = self.next_expected_sequence;
-                        self.next_expected_sequence += 1;
-                        self.last_frame = bytes;
-                        return Ok(SoupBinMessage::Data(Frame {
-                            payload: &self.last_frame,
-                            sequence: seq,
-                        }));
-                    }
-                    PacketType::ServerHeartbeat => {
-                        return Ok(SoupBinMessage::Event(SoupBinEvent::HeartbeatReceived));
-                    }
-                    PacketType::EndOfSession => {
-                        self.state = ClientState::Closed;
-                        return Ok(SoupBinMessage::Event(SoupBinEvent::EndOfSession));
-                    }
-                    PacketType::Debug => continue,
-                    other => {
-                        return Err(SoupBinError::ProtocolViolation(format!(
-                            "unexpected packet type in streaming state: {other:?}"
-                        )));
-                    }
+        let outcome = match self.dispatch_buffered()? {
+            PacketOutcome::NoProgress => {
+                self.ingest_transport_frame()?;
+                self.dispatch_buffered()?
+            }
+            outcome => outcome,
+        };
+        match outcome {
+            PacketOutcome::Data { sequence } => Ok(Some(SoupBinMessage::Data(Frame {
+                payload: &self.last_frame,
+                sequence,
+            }))),
+            PacketOutcome::Event(event) => Ok(Some(SoupBinMessage::Event(event))),
+            PacketOutcome::NoProgress => Ok(None),
+        }
+    }
+
+    /// Drains packets already sitting in `decode_buf`, dispatching the first
+    /// non-Debug one as an owned [`PacketOutcome`] (never borrows `self`, so
+    /// callers can chain another `&mut self` call after it). Debug packets
+    /// decode and drop silently, looping to the next buffered packet.
+    /// `NoProgress` once `decode_buf` yields no more full packets. Shared
+    /// framing/dispatch for `recv` and `poll_recv`.
+    fn dispatch_buffered(&mut self) -> Result<PacketOutcome, SoupBinError> {
+        while let Some((ty, bytes)) = self.take_one_packet()? {
+            match ty {
+                PacketType::SequencedData => {
+                    let sequence = self.next_expected_sequence;
+                    self.next_expected_sequence += 1;
+                    self.last_frame = bytes;
+                    return Ok(PacketOutcome::Data { sequence });
+                }
+                PacketType::ServerHeartbeat => {
+                    return Ok(PacketOutcome::Event(SoupBinEvent::HeartbeatReceived));
+                }
+                PacketType::EndOfSession => {
+                    self.state = ClientState::Closed;
+                    return Ok(PacketOutcome::Event(SoupBinEvent::EndOfSession));
+                }
+                PacketType::Debug => continue,
+                other => {
+                    return Err(SoupBinError::ProtocolViolation(format!(
+                        "unexpected packet type in streaming state: {other:?}"
+                    )));
                 }
             }
-            self.await_more_bytes().await?;
         }
+        Ok(PacketOutcome::NoProgress)
     }
 
     /// Wraps `payload` as `Unsequenced Data (U)` and writes it, plain, without
@@ -178,48 +203,6 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
             return Ok(Some(SoupBinEvent::HeartbeatSent));
         }
         Ok(None)
-    }
-
-    async fn login(&mut self) -> Result<(), SoupBinError> {
-        self.state = ClientState::Authenticating;
-        let payload = build_login_request(&self.cfg);
-        self.write_packet(b'L', &payload).await?;
-
-        let deadline = Instant::now() + self.cfg.login_timeout;
-        loop {
-            if let Some((ty, bytes)) = self.take_one_packet()? {
-                match ty {
-                    PacketType::LoginAccepted => {
-                        if bytes.len() < 30 {
-                            return Err(SoupBinError::ProtocolViolation(
-                                "login accepted payload shorter than Session+SequenceNumber".into(),
-                            ));
-                        }
-                        self.session = parse_ascii_field(&bytes[0..10])?.to_string();
-                        self.next_expected_sequence = parse_ascii_numeric(&bytes[10..30])?;
-                        self.last_recv = Instant::now();
-                        self.state = ClientState::Streaming;
-                        return Ok(());
-                    }
-                    PacketType::LoginRejected => {
-                        let code = parse_ascii_field(&bytes)?.to_string();
-                        return Err(SoupBinError::LoginRejected { code });
-                    }
-                    PacketType::Debug => continue,
-                    other => {
-                        return Err(SoupBinError::ProtocolViolation(format!(
-                            "unexpected packet type during login: {other:?}"
-                        )));
-                    }
-                }
-            }
-            if Instant::now() >= deadline {
-                return Err(SoupBinError::LoginTimeout {
-                    timeout: self.cfg.login_timeout,
-                });
-            }
-            self.await_more_bytes_with_deadline(deadline).await?;
-        }
     }
 
     /// Peeks the length prefix (guarding `max_frame_size`) and tries `wire::parse_packet`.
@@ -280,6 +263,96 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
         Ok(())
     }
 
+    async fn write_packet(&mut self, ty: u8, payload: &[u8]) -> Result<(), SoupBinError> {
+        self.send_buf.clear();
+        encode_packet_into(&mut self.send_buf, ty, payload);
+        self.transport.send(&self.send_buf).await?;
+        self.last_send = Instant::now();
+        Ok(())
+    }
+}
+
+/// Async-only surface: login and streaming `recv` both spin on `AsyncReady::ready`
+/// rather than a bare sync poll loop. Sync-only backends use the base `impl`
+/// block above (`poll_recv`) instead.
+impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
+    /// Runs the login handshake over an already-connected `transport`.
+    ///
+    /// On `Login Accepted`: captures session + sequence, transitions to streaming.
+    /// On `Login Rejected`: returns `LoginRejected`. On no response within
+    /// `cfg.login_timeout`: returns `LoginTimeout`. Either way the transport is
+    /// dropped with `self` on the error path, closing the socket.
+    pub async fn connect(transport: T, cfg: SoupBinClientConfig) -> Result<Self, SoupBinError> {
+        let mut client = Self::from_transport(transport, cfg);
+        client.login().await?;
+        Ok(client)
+    }
+
+    /// Waits for the next sequenced data frame or lifecycle event.
+    ///
+    /// Debug packets are decoded and silently dropped, never surfaced here.
+    /// After an `EndOfSession` event, further calls return `Err(EndOfSession)`.
+    pub async fn recv(&mut self) -> Result<SoupBinMessage<'_>, SoupBinError> {
+        if self.state == ClientState::Closed {
+            return Err(SoupBinError::EndOfSession);
+        }
+        loop {
+            match self.dispatch_buffered()? {
+                PacketOutcome::Data { sequence } => {
+                    return Ok(SoupBinMessage::Data(Frame {
+                        payload: &self.last_frame,
+                        sequence,
+                    }));
+                }
+                PacketOutcome::Event(event) => return Ok(SoupBinMessage::Event(event)),
+                PacketOutcome::NoProgress => {}
+            }
+            self.await_more_bytes().await?;
+        }
+    }
+
+    async fn login(&mut self) -> Result<(), SoupBinError> {
+        self.state = ClientState::Authenticating;
+        let payload = build_login_request(&self.cfg);
+        self.write_packet(b'L', &payload).await?;
+
+        let deadline = Instant::now() + self.cfg.login_timeout;
+        loop {
+            if let Some((ty, bytes)) = self.take_one_packet()? {
+                match ty {
+                    PacketType::LoginAccepted => {
+                        if bytes.len() < 30 {
+                            return Err(SoupBinError::ProtocolViolation(
+                                "login accepted payload shorter than Session+SequenceNumber".into(),
+                            ));
+                        }
+                        self.session = parse_ascii_field(&bytes[0..10])?.to_string();
+                        self.next_expected_sequence = parse_ascii_numeric(&bytes[10..30])?;
+                        self.last_recv = Instant::now();
+                        self.state = ClientState::Streaming;
+                        return Ok(());
+                    }
+                    PacketType::LoginRejected => {
+                        let code = parse_ascii_field(&bytes)?.to_string();
+                        return Err(SoupBinError::LoginRejected { code });
+                    }
+                    PacketType::Debug => continue,
+                    other => {
+                        return Err(SoupBinError::ProtocolViolation(format!(
+                            "unexpected packet type during login: {other:?}"
+                        )));
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(SoupBinError::LoginTimeout {
+                    timeout: self.cfg.login_timeout,
+                });
+            }
+            self.await_more_bytes_with_deadline(deadline).await?;
+        }
+    }
+
     /// Blocks on the transport until bytes arrive. No deadline: heartbeat
     /// silence is caught by `tick_heartbeat`, driven by the caller's own timer.
     async fn await_more_bytes(&mut self) -> Result<(), SoupBinError> {
@@ -318,14 +391,6 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
         };
         result?;
         self.ingest_transport_frame()
-    }
-
-    async fn write_packet(&mut self, ty: u8, payload: &[u8]) -> Result<(), SoupBinError> {
-        self.send_buf.clear();
-        encode_packet_into(&mut self.send_buf, ty, payload);
-        self.transport.send(&self.send_buf).await?;
-        self.last_send = Instant::now();
-        Ok(())
     }
 }
 

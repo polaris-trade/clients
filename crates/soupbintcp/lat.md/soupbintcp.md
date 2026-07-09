@@ -1,6 +1,6 @@
 # SoupBinTCP Client
 
-SoupBinTCP v3.0 session protocol client: wire codec, login/heartbeat/logout state machine, and an optional NASDAQ compressed-feed variant, generic over any `transport_core::StreamSource` + `AsyncReady` backend.
+SoupBinTCP v3.0 session protocol client: wire codec, login/heartbeat/logout state machine, and an optional NASDAQ compressed-feed variant, generic over any `transport_core::StreamSource` backend, with `AsyncReady` optional for async login/recv.
 
 ## Wire codec
 
@@ -12,9 +12,13 @@ See [[src/wire.rs#PacketType]], [[src/wire.rs#parse_packet]].
 
 ## Client state machine and login
 
-`SoupBinClient<T: StreamSource + AsyncReady>` drives one session over an already-connected transport, from login through streaming.
+`SoupBinClient<T: StreamSource>` drives one session over an already-connected transport, from login through streaming.
+
+The struct and its base `impl` (send, heartbeat, `poll_recv`) need only `StreamSource`. A second `impl<T: StreamSource + AsyncReady>` block adds `connect`/`recv`, gated behind the readiness adapter.
 
 `connect` sends `Login Request`, awaits `Login Accepted` / `Login Rejected` / timeout, then transitions Disconnected -> Authenticating -> Streaming. Sequenced data increments an internal counter (seeded from the login response) so reconnect can request the right resume point via `next_expected_sequence`.
+
+Two ways to drain the streaming state: `recv` (async, needs `AsyncReady`) awaits transport readiness between packets. `poll_recv` (sync, needs only `StreamSource`) makes one non-blocking dispatch-or-`recv_into` attempt and returns `Ok(None)` on no progress, so a sync-only backend can busy-spin it. Both share one packet-dispatch helper so framing logic isn't duplicated.
 
 See [[src/client.rs#SoupBinClient]], [[src/frame.rs#Frame]].
 
