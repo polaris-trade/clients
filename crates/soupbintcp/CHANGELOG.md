@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.2.1](https://github.com/polaris-trade/client-soupbintcp/compare/client_soupbintcp-v0.2.0...client_soupbintcp-v0.2.1) (2026-07-09)
+
+
+### Build
+
+* **deps:** bump deps and update README ([#5](https://github.com/polaris-trade/client-soupbintcp/issues/5)) ([3f96eb7](https://github.com/polaris-trade/client-soupbintcp/commit/3f96eb79f2e5f5b7125328ec42e4ff781ae21803))
+
 ## [0.2.0](https://github.com/polaris-trade/client-soupbintcp/compare/client_soupbintcp-v0.1.0...client_soupbintcp-v0.2.0) (2026-07-09)
 
 
