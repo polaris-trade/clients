@@ -65,6 +65,34 @@ impl AbArbiter {
         (seq % self.window_bits.len() as u64) as usize
     }
 
+    /// Re-anchor the window base before any `observe`, for a cold start or
+    /// mid-session join whose first live sequence is far from zero. Without
+    /// this, observing a large seq would slide the window forward one position
+    /// at a time from base 0. Clears the window and staged gap candidates;
+    /// only valid while the window is empty.
+    pub fn rebase(&mut self, base: u64) {
+        self.window_base = base;
+        self.window_bits.fill(false);
+        self.pending_gap_confirms.clear();
+    }
+
+    /// Stage `[start, end)` as gap candidates entering the confirm window at
+    /// `now`. A later arrival on any stream clears the seq (see `observe`), so
+    /// only sequences still unseen after `gap_confirm_window_ms` survive to
+    /// [`AbArbiter::confirmed_gaps`]. Already-delivered sequences are skipped.
+    pub fn note_missing_range(&mut self, start: u64, end_exclusive: u64, now: Instant) {
+        let capacity = self.window_bits.len() as u64;
+        for seq in start..end_exclusive {
+            if seq >= self.window_base && seq < self.window_base + capacity {
+                let idx = self.idx(seq);
+                if self.window_bits[idx] {
+                    continue; // already delivered by some stream
+                }
+            }
+            self.pending_gap_confirms.entry(seq).or_insert(now);
+        }
+    }
+
     /// Observe `seq` arriving on `stream_id`. Slides the window forward if
     /// `seq` is beyond it, marking any never-delivered evicted position as a
     /// pending gap candidate (seen by construction: it's still unset when

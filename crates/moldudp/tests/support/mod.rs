@@ -219,6 +219,26 @@ pub fn mold_multi_packet(session: &[u8; 10], first_sequence: u64, messages: &[&[
     packet
 }
 
+/// Build a MoldUDP64 heartbeat packet: 20-byte header only, `message_count ==
+/// 0`, carrying `next_expected` in the sequence field.
+pub fn mold_heartbeat(session: &[u8; 10], next_expected: u64) -> Vec<u8> {
+    mold_control(session, next_expected, 0)
+}
+
+/// Build a MoldUDP64 end-of-session packet: 20-byte header only,
+/// `message_count == 0xFFFF`, carrying `next_expected` in the sequence field.
+pub fn mold_end_of_session(session: &[u8; 10], next_expected: u64) -> Vec<u8> {
+    mold_control(session, next_expected, 0xFFFF)
+}
+
+fn mold_control(session: &[u8; 10], sequence: u64, message_count: u16) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(20);
+    packet.extend_from_slice(session);
+    packet.extend_from_slice(&sequence.to_be_bytes());
+    packet.extend_from_slice(&message_count.to_be_bytes());
+    packet
+}
+
 /// Poll `fut` to completion on the current thread with a no-op waker. No
 /// executor, no allocation: only safe because every mock recv path here
 /// resolves on the first poll (data is always pre-seeded, `MockTransport`

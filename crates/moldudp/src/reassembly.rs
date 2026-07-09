@@ -54,6 +54,14 @@ impl<S> SequenceReassembler<S> {
         self.expected_next += n;
     }
 
+    /// Re-anchor `expected_next` for a cold start or mid-session join. Used
+    /// before any slab is buffered: joining a live feed at seq N sets the
+    /// baseline to N so the backlog below it is not treated as one giant gap.
+    /// Assumes the ring is empty; later arrivals below `expected` drop as stale.
+    pub fn reset_expected(&mut self, expected: u64) {
+        self.expected_next = expected;
+    }
+
     /// Yield whatever is already buffered contiguously from `expected_next`
     /// on, without inserting anything first. Pairs with `advance_expected`:
     /// the fused in-order path advances past a just-emitted run then calls

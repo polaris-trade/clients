@@ -43,6 +43,12 @@ pub struct MoldUdpReceiverConfig {
     pub max_rerequests_per_gap_per_sec: u32,
     #[serde(with = "humantime_serde")]
     pub gap_confirm_window: Duration,
+    /// Sequence the receiver expects first. `None` adopts the first packet's
+    /// sequence (cold start at session begin). Set explicitly to resume a
+    /// session mid-stream so the unseen backlog below it is not treated as one
+    /// giant gap. See `MoldUdpReceiver` anchoring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_sequence: Option<u64>,
 }
 
 impl Default for MoldUdpReceiverConfig {
@@ -54,6 +60,7 @@ impl Default for MoldUdpReceiverConfig {
             rerequest_enabled: false,
             max_rerequests_per_gap_per_sec: 4,
             gap_confirm_window: Duration::from_millis(5),
+            start_sequence: None,
         }
     }
 }

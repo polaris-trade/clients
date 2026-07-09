@@ -24,6 +24,8 @@ Fixed-capacity slot ring keyed by `seq % capacity`; drains contiguous runs, drop
 
 Tracks missing sequence ranges and turns them into rate-limited MoldUDP64 Request Packets so re-request traffic can't flood the server.
 
+Gaps come from three places: a data packet whose leading sequence jumps past `expected_next`, and heartbeat / end-of-session packets whose next-expected sequence exceeds ours (tail loss during quiet traffic).
+
 - [[src/gap.rs#GapRequestHandler]] — records/coalesces/clears missing ranges.
 - [[src/gap.rs#GapRequestEmitter]] — per-gap rate-limited unicast re-request.
 
@@ -31,14 +33,16 @@ Tracks missing sequence ranges and turns them into rate-limited MoldUDP64 Reques
 
 Sliding bitmap window that dedupes redundant A/B feeds (first arrival wins) and withholds gap confirmation until every stream has missed a sequence for a grace window.
 
-- [[src/ab.rs#AbArbiter]] — observe/confirmed_gaps/stats.
+The receiver stages detected gaps via `note_missing_range` and drains `confirmed_gaps` into the gap handler each poll, so a lagging leg gets its window before a re-request fires.
+
+- [[src/ab.rs#AbArbiter]] — observe (dedup), note_missing_range / confirmed_gaps (grace-windowed gap staging), rebase (anchor base for mid-session join), stats.
 - [[src/ab.rs#ArbiterVerdict]] — Forward / Duplicate / OutOfWindow.
 
 ## Receiver
 
 Assembles wire codec, reassembler, gap tracking, and optional arbiter into one `DatagramSource`-generic receiver driven by `recv_burst`. Base construction needs `TransportBind + PoolAccess`; multicast join adds `UdpTransport`.
 
-- [[src/receiver.rs#MoldUdpReceiver]]: `new` (binds legs, joins multicast when configured), `recv` (borrowed), `recv_owned` (cross-thread handoff), `stats`, `emit_pending_gaps`. A datagram whose leading sequence is already `expected_next` drains inline, borrowed from the still-owned frame (zero alloc); one landing ahead promotes its frame to a single `Arc` and buffers `MessageView`s until the gap fills, cascade-draining on fill. The recv pool is sized at the reorder window plus burst headroom and asserted at construction.
+- [[src/receiver.rs#MoldUdpReceiver]]: `new` (binds legs, joins multicast when configured), `recv` (borrowed), `recv_owned` (cross-thread handoff), `stats`, `emit_pending_gaps`. `expected_next` anchors to `cfg.start_sequence` when set, else to the first packet's sequence, so a mid-session join does not treat the backlog as one giant gap. A datagram whose leading sequence is already `expected_next` drains inline, borrowed from the still-owned frame (zero alloc); one landing ahead promotes its frame to a single `Arc` and buffers `MessageView`s until the gap fills, cascade-draining on fill. The recv pool is sized at the reorder window plus burst headroom and asserted at construction.
 - [[src/receiver.rs#MoldUdpOutcome]] — what `recv`/`recv_owned` hand back: `Frame` (borrowed) / `Owned` (moves a message to another thread) / `Event`.
 
 ## Error, config, event, frame types
@@ -46,8 +50,8 @@ Assembles wire codec, reassembler, gap tracking, and optional arbiter into one `
 Shared shapes: typed errors, serde-first receiver config, control events, and the borrowed consumer-facing frame.
 
 - [[src/error.rs#MoldUdpError]] — typed failure kinds, `Transport` wraps `transport_core::TransportError`.
-- [[src/config.rs#MoldUdpReceiverConfig]] — serde `Default`-backed receiver config.
-- [[src/event.rs#MoldUdpEvent]] — `Heartbeat` / `EndOfSession`, no `SessionOpen` (session id stays internal).
+- [[src/config.rs#MoldUdpReceiverConfig]] — serde `Default`-backed receiver config; `start_sequence` sets the initial expected sequence for a mid-session resume.
+- [[src/event.rs#MoldUdpEvent]] — `Heartbeat { next_expected }` / `EndOfSession { next_expected }`, both carrying the server's next-expected for tail-loss detection; no `SessionOpen` (session id stays internal).
 - [[src/frame.rs#Frame]] — borrowed consumer-facing frame, implements `AsPayload`.
 - [[src/frame.rs#MessageView]] — refcounted view into a datagram slab (`Arc<F>` + offset/len), the owned reassembler slot that replaces per-message `to_vec`.
 - [[src/frame.rs#OwnedFrame]] — owned message handle carried by `MoldUdpOutcome::Owned` for cross-thread handoff.

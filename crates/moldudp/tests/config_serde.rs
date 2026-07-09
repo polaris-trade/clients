@@ -25,6 +25,7 @@ fn sample_config() -> MoldUdpReceiverConfig {
         rerequest_enabled: true,
         max_rerequests_per_gap_per_sec: 8,
         gap_confirm_window: Duration::from_millis(7),
+        start_sequence: Some(42),
     }
 }
 
@@ -53,6 +54,7 @@ fn default_config_has_documented_defaults() {
     assert!(!cfg.rerequest_enabled);
     assert_eq!(cfg.max_rerequests_per_gap_per_sec, 4);
     assert_eq!(cfg.gap_confirm_window, Duration::from_millis(5));
+    assert!(cfg.start_sequence.is_none());
 }
 
 #[test]

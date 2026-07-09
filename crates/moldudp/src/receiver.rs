@@ -126,6 +126,11 @@ pub struct MoldUdpReceiver<T: DatagramSource> {
     /// `current_datagram`/`current_arc`; both get dropped (pool slab
     /// reclaimed) once this reaches zero.
     current_pending: usize,
+    /// Whether `expected_next` has been anchored yet. Configured
+    /// `start_sequence` anchors at construction; otherwise the first packet's
+    /// sequence anchors it (cold start), so a mid-session join does not treat
+    /// the backlog below the first seen sequence as one giant gap.
+    seq_anchored: bool,
     /// Preallocated, reused across `recv_burst` calls; no per-call heap
     /// allocation on the steady-state recv path.
     recv_batch: FrameBatch<T::Frame>,
@@ -171,11 +176,23 @@ impl<T: DatagramSource + TransportBind + PoolAccess> MoldUdpReceiver<T> {
     }
 
     fn assemble(cfg: MoldUdpReceiverConfig, transports: SmallVec<[T; 2]>) -> Self {
-        let arbiter = if transports.len() > 1 {
+        let mut arbiter = if transports.len() > 1 {
             let window_ms = cfg.gap_confirm_window.as_millis() as u64;
             Some(AbArbiter::new(transports.len(), RING_CAPACITY, window_ms))
         } else {
             None
+        };
+        let mut reassembler = SequenceReassembler::new(RING_CAPACITY);
+        // Configured start anchors deterministically now; otherwise the first
+        // packet seen anchors it in `process_next_pending`.
+        let seq_anchored = if let Some(start) = cfg.start_sequence {
+            reassembler.reset_expected(start);
+            if let Some(arb) = arbiter.as_mut() {
+                arb.rebase(start);
+            }
+            true
+        } else {
+            false
         };
         let gap_emitter = cfg
             .rerequest_server_addr
@@ -183,7 +200,7 @@ impl<T: DatagramSource + TransportBind + PoolAccess> MoldUdpReceiver<T> {
         Self {
             transports,
             session: OnceCell::new(),
-            reassembler: SequenceReassembler::new(RING_CAPACITY),
+            reassembler,
             gap_handler: GapRequestHandler::new(),
             gap_emitter,
             arbiter,
@@ -194,6 +211,7 @@ impl<T: DatagramSource + TransportBind + PoolAccess> MoldUdpReceiver<T> {
             current_datagram: None,
             current_arc: None,
             current_pending: 0,
+            seq_anchored,
             recv_batch: FrameBatch::with_capacity(MAX_INFLIGHT_BURST),
         }
     }
@@ -432,6 +450,33 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                 }
             }
             self.process_next_pending()?;
+            self.drain_confirmed_gaps();
+        }
+    }
+
+    /// Record a tail gap discovered from a heartbeat / end-of-session
+    /// next-expected sequence: anything between our `expected_next` and the
+    /// server's `next_expected` was lost during quiet traffic and never seen.
+    fn note_tail_gap(&mut self, next_expected: u64) {
+        let expected = self.reassembler.expected_next();
+        if next_expected > expected {
+            self.gap_handler
+                .record_missing_range(expected, next_expected);
+            self.ready.push_back(ReadyItem::Gap);
+        }
+    }
+
+    /// Promote arbiter gap candidates whose confirm window has elapsed into the
+    /// gap handler. Only the multi-stream path stages candidates; single-stream
+    /// records gaps inline in `process_next_pending`, so this is a no-op there.
+    fn drain_confirmed_gaps(&mut self) {
+        let Some(arbiter) = self.arbiter.as_mut() else {
+            return;
+        };
+        let confirmed = arbiter.confirmed_gaps(Instant::now());
+        for seq in confirmed {
+            self.gap_handler.record_gap(seq);
+            self.ready.push_back(ReadyItem::Gap);
         }
     }
 
@@ -491,16 +536,34 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
             Some(_) => {}
         }
 
+        // Cold start / mid-session join: anchor the expected sequence to the
+        // first packet seen rather than assuming seq 1, so joining a live feed
+        // does not treat the whole backlog as one giant gap. Heartbeat and
+        // end-of-session both carry the server's next-expected, so any first
+        // packet anchors correctly. Configured `start_sequence` anchors at
+        // construction instead.
+        if !self.seq_anchored {
+            self.reassembler.reset_expected(header.sequence);
+            if let Some(arbiter) = self.arbiter.as_mut() {
+                arbiter.rebase(header.sequence);
+            }
+            self.seq_anchored = true;
+        }
+
         match header.kind() {
             PacketKind::Heartbeat => {
+                let next_expected = header.sequence;
+                self.note_tail_gap(next_expected);
                 self.ready
-                    .push_back(ReadyItem::Event(MoldUdpEvent::Heartbeat));
+                    .push_back(ReadyItem::Event(MoldUdpEvent::Heartbeat { next_expected }));
                 return Ok(());
             }
             PacketKind::EndOfSession => {
+                let next_expected = header.sequence;
+                self.note_tail_gap(next_expected);
                 self.ready
                     .push_back(ReadyItem::Event(MoldUdpEvent::EndOfSession {
-                        next_expected: header.sequence,
+                        next_expected,
                     }));
                 return Ok(());
             }
@@ -515,6 +578,26 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
             blocks.push((seq, offset, bytes.len()));
         }
 
+        // A packet's blocks are numbered contiguously, so the only gap is the
+        // jump from `expected_next` to this packet's leading sequence. Record
+        // it once, not once per block (which would re-widen the range over
+        // already-received blocks and re-request them). Single stream records
+        // inline; A/B stages the range in the arbiter so a lagging leg gets
+        // its confirm window before a re-request fires.
+        let expected0 = self.reassembler.expected_next();
+        if header.sequence > expected0 {
+            match self.arbiter.as_mut() {
+                Some(arbiter) => {
+                    arbiter.note_missing_range(expected0, header.sequence, Instant::now());
+                }
+                None => {
+                    self.gap_handler
+                        .record_missing_range(expected0, header.sequence);
+                    self.ready.push_back(ReadyItem::Gap);
+                }
+            }
+        }
+
         self.current_datagram = Some(frame);
         self.current_arc = None;
         self.current_pending = 0;
@@ -527,11 +610,6 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                 }
             }
 
-            let expected = self.reassembler.expected_next();
-            if seq > expected {
-                self.gap_handler.record_missing_range(expected, seq);
-                self.ready.push_back(ReadyItem::Gap);
-            }
             self.gap_handler.mark_received(seq);
 
             match seq.cmp(&self.reassembler.expected_next()) {
