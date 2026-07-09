@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.2.3](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.2...client_moldudp-v0.2.3) (2026-07-09)
+
+
+### Bug fixes
+
+* **receiver:** gap detection from heartbeats and mid-session anchor ([#8](https://github.com/polaris-trade/client-moldudp/issues/8)) ([db8d2b9](https://github.com/polaris-trade/client-moldudp/commit/db8d2b9c007fbc1e454f0b1a6d24f52d2a776cf5))
+
 ## [0.2.2](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.1...client_moldudp-v0.2.2) (2026-07-09)
 
 
