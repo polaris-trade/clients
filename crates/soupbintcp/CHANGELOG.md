@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.2.0](https://github.com/polaris-trade/client-soupbintcp/compare/client_soupbintcp-v0.1.0...client_soupbintcp-v0.2.0) (2026-07-09)
+
+
+### Features
+
+* **recv:** land ingest directly into the decode buffer ([#3](https://github.com/polaris-trade/client-soupbintcp/issues/3)) ([9581ddc](https://github.com/polaris-trade/client-soupbintcp/commit/9581ddc030df7307031c30bd6b096ce893a98dd7))
+
 ## [0.1.0](https://github.com/polaris-trade/client-soupbintcp/releases/tag/client_soupbintcp-v0.1.0) - 2026-07-07
 
 ### Bug fixes
@@ -25,4 +32,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Refactor
 
 - Rename crate soupbintcp to client_soupbintcp, folder to client-soupbintcp
-
