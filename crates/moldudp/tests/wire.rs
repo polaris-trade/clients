@@ -1,7 +1,7 @@
 //! Wire codec tests: header parse, packet classification, message block
 //! iteration, and the zero-alloc guarantee on the iterator's hot path.
 
-use client_moldudp::{MessageBlockIter, MoldUdpError, PacketKind, parse_header};
+use client_moldudp::{MessageBlockIter, MoldUdpError, PacketKind, parse_header, wire};
 
 fn header_bytes(session: &[u8; 10], sequence: u64, message_count: u16) -> Vec<u8> {
     let mut buf = Vec::with_capacity(20);
@@ -55,11 +55,13 @@ fn block_iter_borrows_slice() {
 
     let info = allocation_counter::measure(|| {
         let mut iter = MessageBlockIter::new(&body, 2);
-        let first = iter.next().unwrap().unwrap();
+        let (offset1, first) = iter.next().unwrap().unwrap();
         assert_eq!(first, b"hi");
+        assert_eq!(offset1, wire::HEADER_LEN + 2); // header + this block's length prefix
         assert_eq!(first.as_ptr(), body[2..].as_ptr()); // borrowed, not copied
-        let second = iter.next().unwrap().unwrap();
+        let (offset2, second) = iter.next().unwrap().unwrap();
         assert_eq!(second, b"bye");
+        assert_eq!(offset2, wire::HEADER_LEN + 2 + 2 + 2); // + first block's len prefix + payload + this prefix
         assert!(iter.next().is_none());
     });
     assert_eq!(info.count_total, 0, "block iteration must not allocate");

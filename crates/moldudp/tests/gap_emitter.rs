@@ -1,42 +1,17 @@
 //! `GapRequestEmitter` rate limiting: caps re-request traffic per gap so a
 //! gap that never fills can't flood the re-request server.
 
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use client_moldudp::{GapRequest, GapRequestEmitter};
-use transport_core::{AsPayload, Transport, TransportError};
+use transport_core::{TransportCore, TransportError};
 
-/// Minimal `Transport` double that just records every buffer handed to `send`.
+/// Minimal `TransportCore` double that just records every buffer handed to `send`.
 struct RecordingTransport {
     sent: Vec<Vec<u8>>,
 }
 
-struct NoFrame;
-impl AsPayload for NoFrame {
-    fn payload(&self) -> &[u8] {
-        &[]
-    }
-    fn sequence(&self) -> u64 {
-        0
-    }
-    fn stream_id(&self) -> u8 {
-        0
-    }
-}
-
-impl Transport for RecordingTransport {
-    type Frame<'a> = NoFrame;
-    type Event = ();
-
-    fn poll_event(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), TransportError>> {
-        Poll::Pending
-    }
-
-    fn next_frame(&self) -> Option<Self::Frame<'_>> {
-        None
-    }
-
+impl TransportCore for RecordingTransport {
     fn name(&self) -> &'static str {
         "recording"
     }

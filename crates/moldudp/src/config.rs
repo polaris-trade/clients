@@ -1,9 +1,12 @@
 //! Receiver config: serde-first so deployments load JSON/TOML without hand
 //! rolled parsing. Every optional field defaults so a minimal file suffices.
 
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
+
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
 
 /// One A/B feed leg: its own bind address and, for multicast, its own NIC
 /// selection (A and B often ride different interfaces).

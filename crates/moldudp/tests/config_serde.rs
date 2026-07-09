@@ -1,7 +1,9 @@
 //! Config serde roundtrips: guards on-disk schema stability for JSON and TOML.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 
 use client_moldudp::{MoldUdpReceiverConfig, StreamConfig};
 

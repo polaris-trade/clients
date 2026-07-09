@@ -69,11 +69,15 @@ pub fn parse_header(buf: &[u8]) -> Result<DownstreamHeader, MoldUdpError> {
 }
 
 /// Borrows message block payloads straight from the datagram slice; no copy.
-/// Each block is `Length[2 BE]` followed by `Length` payload bytes.
+/// Each block is `Length[2 BE]` followed by `Length` payload bytes. Yields
+/// `(offset, block)`, `offset` being the block's byte position within the
+/// *full* datagram (header included), so a caller can build a
+/// [`crate::frame::MessageView`] without re-deriving pointer arithmetic.
 pub struct MessageBlockIter<'a> {
     remaining: &'a [u8],
     blocks_left: u16,
     truncated: bool,
+    next_offset: usize,
 }
 
 impl<'a> MessageBlockIter<'a> {
@@ -83,12 +87,13 @@ impl<'a> MessageBlockIter<'a> {
             remaining: payload,
             blocks_left: message_count,
             truncated: false,
+            next_offset: HEADER_LEN,
         }
     }
 }
 
 impl<'a> Iterator for MessageBlockIter<'a> {
-    type Item = Result<&'a [u8], MoldUdpError>;
+    type Item = Result<(usize, &'a [u8]), MoldUdpError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.truncated || self.blocks_left == 0 {
@@ -105,8 +110,10 @@ impl<'a> Iterator for MessageBlockIter<'a> {
             return Some(Err(MoldUdpError::PacketTooShort));
         }
         let (block, rest) = rest.split_at(len);
+        let offset = self.next_offset + 2;
+        self.next_offset += 2 + len;
         self.remaining = rest;
         self.blocks_left -= 1;
-        Some(Ok(block))
+        Some(Ok((offset, block)))
     }
 }

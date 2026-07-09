@@ -51,6 +51,7 @@ async fn later_session_mismatch_rejected_after_first_locks_it() {
             assert_eq!(frame.payload, b"first");
         }
         MoldUdpOutcome::Event(_) => panic!("unexpected event"),
+        MoldUdpOutcome::Owned(_) => panic!("recv() must not yield an owned frame"),
     }
 
     sender

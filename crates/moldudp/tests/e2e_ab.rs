@@ -71,6 +71,7 @@ async fn each_sequence_delivered_exactly_once_via_ab_merge() {
                 received.push((frame.sequence, frame.payload.to_vec()))
             }
             Ok(MoldUdpOutcome::Event(_)) => {}
+            Ok(MoldUdpOutcome::Owned(_)) => panic!("recv() must not yield an owned frame"),
             Err(client_moldudp::MoldUdpError::GapDetected) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }

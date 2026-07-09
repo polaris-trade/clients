@@ -43,6 +43,7 @@ async fn loopback_delivers_n_frames_in_order() {
         match receiver.recv().await.expect("recv") {
             MoldUdpOutcome::Frame(frame) => received.push((frame.sequence, frame.payload.to_vec())),
             MoldUdpOutcome::Event(_) => panic!("unexpected event"),
+            MoldUdpOutcome::Owned(_) => panic!("recv() must not yield an owned frame"),
         }
     }
 

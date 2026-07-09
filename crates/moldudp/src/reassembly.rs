@@ -44,6 +44,24 @@ impl<S> SequenceReassembler<S> {
     fn slot_index(&self, seq: u64) -> usize {
         (seq % self.capacity) as usize
     }
+
+    /// Bump `expected_next` past a run the caller already emitted without
+    /// going through [`SequenceReassembler::insert`] (the fused in-order recv
+    /// path: the message was borrowed straight from the source datagram, so
+    /// there is nothing to store in a slot). `drain_ready` picks up from the
+    /// new position.
+    pub fn advance_expected(&mut self, n: u64) {
+        self.expected_next += n;
+    }
+
+    /// Yield whatever is already buffered contiguously from `expected_next`
+    /// on, without inserting anything first. Pairs with `advance_expected`:
+    /// the fused in-order path advances past a just-emitted run then calls
+    /// this to cascade-drain any older out-of-order arrivals that are now
+    /// contiguous, with no forced `insert`.
+    pub fn drain_ready(&mut self) -> DrainCursor<'_, S> {
+        DrainCursor { inner: self }
+    }
 }
 
 impl<S: AsRef<[u8]> + 'static> SequenceReassembler<S> {

@@ -4,8 +4,10 @@
 //! `gap_confirm_window_ms`, so one stream's transient lag doesn't fire a
 //! spurious re-request.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use bitvec::vec::BitVec;
 

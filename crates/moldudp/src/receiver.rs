@@ -1,46 +1,89 @@
 //! Assembles wire codec, reassembler, gap tracking, and optional A/B arbiter
-//! into one `Transport`-generic receiver. Base construction only needs
-//! `TransportBind`; multicast join needs the extra `UdpTransport` bound
-//! (`new_with_multicast`), since not every backend supports it.
+//! into one `DatagramSource`-generic receiver. Base construction only needs
+//! `TransportBind` + `PoolAccess`; multicast join needs the extra
+//! `UdpTransport` bound (`new_with_multicast`), since not every backend
+//! supports it.
+//!
+//! Recv drives `DatagramSource::recv_burst` for owned frames. A datagram
+//! whose leading sequence is already `expected_next` drains inline, borrowed
+//! straight from the still-owned frame (no allocation); a datagram that lands
+//! ahead of `expected_next` promotes its frame to one `Arc` and buffers
+//! [`MessageView`]s in the reassembler until the gap fills.
 
-use std::cell::OnceCell;
-use std::collections::VecDeque;
-use std::task::Poll;
-use std::time::Instant;
+use std::{
+    cell::OnceCell, collections::VecDeque, future::Future, sync::Arc, task::Poll, time::Instant,
+};
 
 use smallvec::SmallVec;
 use transport_core::{
-    AsPayload, BatchConfig, BindConfig, MulticastInterface, RecvBufConfig, RingConfig,
-    SendBufConfig, Transport, TransportBind, UdpTransport,
+    AffinityConfig, AsPayload, AsyncReady, BatchConfig, BindConfig, BufferPool, DatagramSource,
+    FrameBatch, MulticastInterface, PoolAccess, RecvBufConfig, RingConfig, SendBufConfig,
+    TransportBind, TransportCore, TransportError, UdpTransport,
 };
 
-use crate::ab::{AbArbiter, ArbiterStats, ArbiterVerdict};
-use crate::config::MoldUdpReceiverConfig;
-use crate::error::MoldUdpError;
-use crate::event::MoldUdpEvent;
-use crate::frame::Frame;
-use crate::gap::{GapRequest, GapRequestEmitter, GapRequestHandler};
-use crate::reassembly::SequenceReassembler;
-use crate::wire::{self, PacketKind};
+use crate::{
+    ab::{AbArbiter, ArbiterStats, ArbiterVerdict},
+    config::MoldUdpReceiverConfig,
+    error::MoldUdpError,
+    event::MoldUdpEvent,
+    frame::{Frame, MessageView, OwnedFrame},
+    gap::{GapRequest, GapRequestEmitter, GapRequestHandler},
+    reassembly::SequenceReassembler,
+    wire::{self, PacketKind},
+};
 
 /// Ring capacity for both the sequence reassembler and the A/B arbiter window.
 const RING_CAPACITY: usize = 4096;
 
-enum ReadyItem {
-    Frame {
+/// Burst depth per `recv_burst` call. Also the headroom added on top of
+/// `RING_CAPACITY` when sizing the backend's recv pool: worst case, a full
+/// reorder window is pinned by buffered messages while a fresh burst lands.
+const MAX_INFLIGHT_BURST: usize = 64;
+
+/// One drained item waiting to be handed to a caller via `recv`/`recv_owned`.
+/// `Inline` borrows from whichever of `current_datagram`/`current_arc` is
+/// currently backing it (zero-alloc, in-order fast path); `View` carries its
+/// own `Arc` (gap-buffered or cascade-drained from a slot the reassembler had
+/// already been holding across earlier calls).
+enum ReadyItem<F> {
+    Inline {
         sequence: u64,
         stream_id: u8,
-        payload: Vec<u8>,
+        offset: usize,
+        len: usize,
+    },
+    View {
+        view: MessageView<F>,
+        sequence: u64,
+        stream_id: u8,
     },
     Event(MoldUdpEvent),
     Gap,
 }
 
 /// What [`MoldUdpReceiver::recv`] hands back on a data or control packet.
-#[derive(Debug, Clone, Copy)]
-pub enum MoldUdpOutcome<'a> {
+/// [`MoldUdpReceiver::recv_owned`] uses the same type via the `Owned` variant
+/// so a caller can move a message to another thread.
+pub enum MoldUdpOutcome<'a, F> {
     Frame(Frame<'a>),
+    Owned(OwnedFrame<F>),
     Event(MoldUdpEvent),
+}
+
+// Manual impl: deriving would add an `F: Debug` bound backend frame types
+// (e.g. `UdpFrame`) don't carry.
+impl<'a, F> std::fmt::Debug for MoldUdpOutcome<'a, F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MoldUdpOutcome::Frame(frame) => f.debug_tuple("Frame").field(frame).finish(),
+            MoldUdpOutcome::Owned(owned) => f
+                .debug_struct("Owned")
+                .field("sequence", &owned.sequence)
+                .field("stream_id", &owned.stream_id)
+                .finish(),
+            MoldUdpOutcome::Event(ev) => f.debug_tuple("Event").field(ev).finish(),
+        }
+    }
 }
 
 /// Snapshot of receiver-level health: arbiter stats (multi-stream only) and
@@ -51,7 +94,7 @@ pub struct ReceiverStats {
     pub pending_gaps: Vec<GapRequest>,
 }
 
-/// Backend-generic MoldUDP64 receiver over any `transport_core::Transport`.
+/// Backend-generic MoldUDP64 receiver over any `transport_core::DatagramSource`.
 /// ```
 /// # use client_moldudp::{MoldUdpReceiver, MoldUdpReceiverConfig, StreamConfig};
 /// # use transport_tokio::TokioTransport;
@@ -61,31 +104,67 @@ pub struct ReceiverStats {
 /// MoldUdpReceiver::<TokioTransport>::new(cfg).await.unwrap();
 /// # });
 /// ```
-pub struct MoldUdpReceiver<T: Transport> {
+pub struct MoldUdpReceiver<T: DatagramSource> {
     transports: SmallVec<[T; 2]>,
     session: OnceCell<[u8; 10]>,
-    reassembler: SequenceReassembler<Vec<u8>>,
+    reassembler: SequenceReassembler<MessageView<T::Frame>>,
     gap_handler: GapRequestHandler,
     gap_emitter: Option<GapRequestEmitter>,
     arbiter: Option<AbArbiter>,
     cfg: MoldUdpReceiverConfig,
-    ready: VecDeque<ReadyItem>,
-    current: Option<ReadyItem>,
+    ready: VecDeque<ReadyItem<T::Frame>>,
+    current: Option<ReadyItem<T::Frame>>,
+    /// Datagrams reaped by `recv_burst` but not yet decoded into `ready`.
+    pending_datagrams: VecDeque<(u8, T::Frame)>,
+    /// The one still-owned (not yet `Arc`'d) datagram backing outstanding
+    /// `Inline` items, if any.
+    current_datagram: Option<T::Frame>,
+    /// Set once a message inside `current_datagram` needed buffering; from
+    /// then on outstanding `Inline` items resolve through this instead.
+    current_arc: Option<Arc<T::Frame>>,
+    /// Count of outstanding `Inline` items still referencing
+    /// `current_datagram`/`current_arc`; both get dropped (pool slab
+    /// reclaimed) once this reaches zero.
+    current_pending: usize,
+    /// Preallocated, reused across `recv_burst` calls; no per-call heap
+    /// allocation on the steady-state recv path.
+    recv_batch: FrameBatch<T::Frame>,
 }
 
-impl<T: TransportBind> MoldUdpReceiver<T> {
+impl<T: DatagramSource + TransportBind + PoolAccess> MoldUdpReceiver<T> {
     async fn bind_streams(cfg: MoldUdpReceiverConfig) -> Result<Self, MoldUdpError> {
         let mut transports: SmallVec<[T; 2]> = SmallVec::new();
+        let required_slabs = RING_CAPACITY + MAX_INFLIGHT_BURST;
+        // `RingConfig` is `#[non_exhaustive]`: mutate the default in place
+        // rather than a struct-update literal.
+        let mut ring = RingConfig::default();
+        ring.slab_count = required_slabs;
         for stream in &cfg.streams {
             let bind = BindConfig::new(stream.bind_addr);
             let t = T::bind_udp(
                 bind,
                 RecvBufConfig::default(),
                 SendBufConfig::default(),
-                RingConfig::default(),
+                ring.clone(),
                 BatchConfig::default(),
+                AffinityConfig::default(),
             )
             .await?;
+            // The reorder window pins at most one datagram slab per buffered
+            // message; a fresh burst must still find a free slab on top of
+            // that. Undersized pools fail fast here, not as a live stall.
+            let cap = t.pool().capacity();
+            if cap < required_slabs {
+                return Err(MoldUdpError::Transport(
+                    TransportError::BackendUnavailable {
+                        name: t.name(),
+                        reason: format!(
+                            "recv pool capacity {cap} below required {required_slabs} \
+                         (reorder window {RING_CAPACITY} + burst headroom {MAX_INFLIGHT_BURST})"
+                        ),
+                    },
+                ));
+            }
             transports.push(t);
         }
         Ok(Self::assemble(cfg, transports))
@@ -109,13 +188,18 @@ impl<T: TransportBind> MoldUdpReceiver<T> {
             gap_emitter,
             arbiter,
             cfg,
-            ready: VecDeque::new(),
+            ready: VecDeque::with_capacity(MAX_INFLIGHT_BURST),
             current: None,
+            pending_datagrams: VecDeque::with_capacity(MAX_INFLIGHT_BURST),
+            current_datagram: None,
+            current_arc: None,
+            current_pending: 0,
+            recv_batch: FrameBatch::with_capacity(MAX_INFLIGHT_BURST),
         }
     }
 }
 
-impl<T: TransportBind + UdpTransport> MoldUdpReceiver<T> {
+impl<T: DatagramSource + TransportBind + PoolAccess + UdpTransport> MoldUdpReceiver<T> {
     /// Bind one `T` per configured stream leg; when `cfg.multicast_addr` is
     /// set, join that group on every leg. The `T: UdpTransport` bound gates
     /// the join, so every backend used here must support multicast.
@@ -139,7 +223,7 @@ impl<T: TransportBind + UdpTransport> MoldUdpReceiver<T> {
     }
 }
 
-impl<T: Transport> MoldUdpReceiver<T> {
+impl<T: DatagramSource> MoldUdpReceiver<T> {
     /// Raw access to the bound transports, for callers that need
     /// backend-specific introspection (e.g. the local bound address in tests).
     pub fn transports(&self) -> &[T] {
@@ -157,7 +241,7 @@ impl<T: Transport> MoldUdpReceiver<T> {
     /// (typically a small unicast socket pointed at `rerequest_server_addr`,
     /// separate from the multicast receive legs). No-op until session id is
     /// known, re-request is enabled, and a rerequest server is configured.
-    pub async fn emit_pending_gaps<Tx: Transport>(
+    pub async fn emit_pending_gaps<Tx: TransportCore>(
         &mut self,
         transport: &mut Tx,
     ) -> Result<usize, MoldUdpError> {
@@ -177,25 +261,93 @@ impl<T: Transport> MoldUdpReceiver<T> {
         emitter.emit(&gaps, session, transport).await
     }
 
-    /// Next data frame or control event. Polls every stream leg; on a gap,
-    /// returns `Err(MoldUdpError::GapDetected)` for that call only (already
-    /// recorded in the gap handler / arbiter) so the caller can log and keep
-    /// calling `recv` without losing reassembly progress.
-    pub async fn recv(&mut self) -> Result<MoldUdpOutcome<'_>, MoldUdpError> {
+    /// Resolve an `Inline` item's bytes against whichever of
+    /// `current_datagram`/`current_arc` currently backs it.
+    fn resolve_current(&self, offset: usize, len: usize) -> &[u8] {
+        if let Some(arc) = &self.current_arc {
+            return &arc.payload()[offset..offset + len];
+        }
+        let frame = self
+            .current_datagram
+            .as_ref()
+            .expect("Inline ready item pending without a backing datagram");
+        &frame.payload()[offset..offset + len]
+    }
+
+    /// Release whatever backs an outgoing `Inline` item once no more
+    /// outstanding items reference it.
+    fn retire_current(&mut self, item: &ReadyItem<T::Frame>) {
+        if matches!(item, ReadyItem::Inline { .. }) {
+            self.current_pending -= 1;
+            if self.current_pending == 0 {
+                self.current_datagram = None;
+                self.current_arc = None;
+            }
+        }
+    }
+
+    /// Promote `current_datagram` to a shared `Arc`, or clone the existing one
+    /// if this datagram already needed buffering for an earlier message. At
+    /// most one `Arc::new` per datagram.
+    fn arc_current(&mut self) -> Arc<T::Frame> {
+        if let Some(arc) = &self.current_arc {
+            return Arc::clone(arc);
+        }
+        let frame = self
+            .current_datagram
+            .take()
+            .expect("current datagram must be set while its blocks are being processed");
+        let arc = Arc::new(frame);
+        self.current_arc = Some(Arc::clone(&arc));
+        arc
+    }
+}
+
+impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
+    /// Next data frame or control event, borrowed from the receiver. On a
+    /// gap, returns `Err(MoldUdpError::GapDetected)` for that call only
+    /// (already recorded in the gap handler / arbiter) so the caller can log
+    /// and keep calling `recv` without losing reassembly progress.
+    pub async fn recv(&mut self) -> Result<MoldUdpOutcome<'_, T::Frame>, MoldUdpError> {
+        // Retire the previous call's item up front: by the time `recv` can
+        // run again, the borrow checker guarantees the caller's prior
+        // `Frame<'_>` is dead, so it is safe to release its backing storage
+        // now. Deferring this past `poll_once` would let `process_next_pending`
+        // clobber `current_datagram` for a new datagram while the old one's
+        // `current_pending` count is still outstanding.
+        if let Some(prev) = self.current.take() {
+            self.retire_current(&prev);
+        }
         loop {
             if let Some(item) = self.ready.pop_front() {
                 self.current = Some(item);
                 break;
             }
-            self.poll_once().await?;
+            self.poll_once()?;
+            if self.ready.is_empty() {
+                self.wait_ready().await?;
+            }
         }
         match self.current.as_ref().expect("just populated above") {
-            ReadyItem::Frame {
+            ReadyItem::Inline {
                 sequence,
                 stream_id,
-                payload,
+                offset,
+                len,
+            } => {
+                let payload = self.resolve_current(*offset, *len);
+                Ok(MoldUdpOutcome::Frame(Frame {
+                    payload,
+                    sequence: *sequence,
+                    stream_id: *stream_id,
+                }))
+            }
+            ReadyItem::View {
+                view,
+                sequence,
+                stream_id,
             } => Ok(MoldUdpOutcome::Frame(Frame {
-                payload,
+                payload: view.as_ref(),
                 sequence: *sequence,
                 stream_id: *stream_id,
             })),
@@ -204,122 +356,223 @@ impl<T: Transport> MoldUdpReceiver<T> {
         }
     }
 
-    async fn poll_once(&mut self) -> Result<(), MoldUdpError> {
+    /// Owned counterpart to [`MoldUdpReceiver::recv`] for cross-thread
+    /// handoff (a sharded engine core): materializes an `Arc`-backed
+    /// [`OwnedFrame`] instead of a borrow.
+    pub async fn recv_owned(&mut self) -> Result<MoldUdpOutcome<'static, T::Frame>, MoldUdpError> {
+        // See `recv`'s comment: retire any borrowed item left over from a
+        // prior `recv` call before touching `current_datagram`/`current_arc`.
+        if let Some(prev) = self.current.take() {
+            self.retire_current(&prev);
+        }
+        loop {
+            if let Some(item) = self.ready.pop_front() {
+                return self.materialize_owned(item);
+            }
+            self.poll_once()?;
+            if self.ready.is_empty() {
+                self.wait_ready().await?;
+            }
+        }
+    }
+
+    fn materialize_owned(
+        &mut self,
+        item: ReadyItem<T::Frame>,
+    ) -> Result<MoldUdpOutcome<'static, T::Frame>, MoldUdpError> {
+        match item {
+            ReadyItem::Inline {
+                sequence,
+                stream_id,
+                offset,
+                len,
+            } => {
+                let arc = self.arc_current();
+                self.current_pending -= 1;
+                if self.current_pending == 0 {
+                    self.current_datagram = None;
+                    self.current_arc = None;
+                }
+                let view = MessageView::new(arc, offset, len);
+                Ok(MoldUdpOutcome::Owned(OwnedFrame {
+                    view,
+                    sequence,
+                    stream_id,
+                }))
+            }
+            ReadyItem::View {
+                view,
+                sequence,
+                stream_id,
+            } => Ok(MoldUdpOutcome::Owned(OwnedFrame {
+                view,
+                sequence,
+                stream_id,
+            })),
+            ReadyItem::Event(ev) => Ok(MoldUdpOutcome::Event(ev)),
+            ReadyItem::Gap => Err(MoldUdpError::GapDetected),
+        }
+    }
+
+    /// Reap and decode until `ready` has something or every leg is drained.
+    /// Pure sync spin, no wait: an empty `ready` on return means nothing was
+    /// reapable anywhere, and the caller should wait on readiness.
+    fn poll_once(&mut self) -> Result<(), MoldUdpError> {
+        loop {
+            if !self.ready.is_empty() {
+                return Ok(());
+            }
+            if self.pending_datagrams.is_empty() {
+                let mut reaped_any = false;
+                for idx in 0..self.transports.len() {
+                    reaped_any |= self.reap_burst(idx)?;
+                }
+                if !reaped_any {
+                    return Ok(());
+                }
+            }
+            self.process_next_pending()?;
+        }
+    }
+
+    /// Block until some leg becomes readable, then reap it. Only entered when
+    /// a sync spin found nothing, so the per-leg `ready()` futures this boxes
+    /// never touch the hot path.
+    async fn wait_ready(&mut self) -> Result<(), MoldUdpError> {
         let transports = &mut self.transports;
-        let (idx, result) = std::future::poll_fn(|cx| {
-            for (i, t) in transports.iter_mut().enumerate() {
-                if let Poll::Ready(res) = t.poll_event(cx) {
-                    return Poll::Ready((i, res));
+        let mut waiters: Vec<_> = transports.iter_mut().map(|t| Box::pin(t.ready())).collect();
+        std::future::poll_fn(|cx| {
+            for w in waiters.iter_mut() {
+                if w.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(());
                 }
             }
             Poll::Pending
         })
         .await;
-        result.map_err(MoldUdpError::Transport)?;
-        // Disjoint field borrow: decode straight from the borrowed transport
-        // frame while mutating decode state. Avoids copying the whole datagram;
-        // per-message payloads are still owned when they land in reassembler
-        // slots, since frames outlive their source datagram across recv calls.
-        let Self {
-            transports,
-            session,
-            reassembler,
-            gap_handler,
-            arbiter,
-            ready,
-            ..
-        } = &mut *self;
-        let Some(frame) = transports[idx].next_frame() else {
+        drop(waiters);
+        Ok(())
+    }
+
+    /// Reap up to `MAX_INFLIGHT_BURST` datagrams from leg `idx` into
+    /// `pending_datagrams`, tagged with their stream id. Returns whether
+    /// anything landed.
+    fn reap_burst(&mut self, idx: usize) -> Result<bool, MoldUdpError> {
+        let n = self.transports[idx].recv_burst(&mut self.recv_batch, MAX_INFLIGHT_BURST)?;
+        if n == 0 {
+            return Ok(false);
+        }
+        for frame in self.recv_batch.drain() {
+            self.pending_datagrams.push_back((idx as u8, frame));
+        }
+        Ok(true)
+    }
+
+    /// Decode the next pending datagram into `ready` items. In-order
+    /// messages drain inline (no `Arc`); a message landing ahead of
+    /// `expected_next` promotes the datagram to a shared `Arc` (at most once
+    /// per datagram) and buffers a `MessageView` in the reassembler.
+    fn process_next_pending(&mut self) -> Result<(), MoldUdpError> {
+        let Some((stream_id, frame)) = self.pending_datagrams.pop_front() else {
             return Ok(());
         };
-        process_datagram(
-            session,
-            reassembler,
-            gap_handler,
-            arbiter,
-            ready,
-            idx as u8,
-            frame.payload(),
-        )
-    }
-}
+        let header = wire::parse_header(frame.payload())?;
 
-fn process_datagram(
-    session: &mut OnceCell<[u8; 10]>,
-    reassembler: &mut SequenceReassembler<Vec<u8>>,
-    gap_handler: &mut GapRequestHandler,
-    arbiter: &mut Option<AbArbiter>,
-    ready: &mut VecDeque<ReadyItem>,
-    stream_id: u8,
-    datagram: &[u8],
-) -> Result<(), MoldUdpError> {
-    let header = wire::parse_header(datagram)?;
-
-    match session.get() {
-        None => {
-            let _ = session.set(header.session);
+        match self.session.get() {
+            None => {
+                let _ = self.session.set(header.session);
+            }
+            Some(&expected) if expected != header.session => {
+                return Err(MoldUdpError::SessionMismatch {
+                    expected,
+                    got: header.session,
+                });
+            }
+            Some(_) => {}
         }
-        Some(&expected) if expected != header.session => {
-            return Err(MoldUdpError::SessionMismatch {
-                expected,
-                got: header.session,
-            });
-        }
-        Some(_) => {}
-    }
 
-    match header.kind() {
-        PacketKind::Heartbeat => {
-            ready.push_back(ReadyItem::Event(MoldUdpEvent::Heartbeat));
-            return Ok(());
+        match header.kind() {
+            PacketKind::Heartbeat => {
+                self.ready
+                    .push_back(ReadyItem::Event(MoldUdpEvent::Heartbeat));
+                return Ok(());
+            }
+            PacketKind::EndOfSession => {
+                self.ready
+                    .push_back(ReadyItem::Event(MoldUdpEvent::EndOfSession {
+                        next_expected: header.sequence,
+                    }));
+                return Ok(());
+            }
+            PacketKind::Data => {}
         }
-        PacketKind::EndOfSession => {
-            ready.push_back(ReadyItem::Event(MoldUdpEvent::EndOfSession {
-                next_expected: header.sequence,
-            }));
-            return Ok(());
+
+        // Collect (seq, offset, len) before moving `frame`: the iterator
+        // borrows `frame.payload()`, which must finish before ownership moves.
+        let mut blocks: SmallVec<[(u64, usize, usize); 8]> = SmallVec::new();
+        for (seq, block) in (header.sequence..).zip(header.blocks(frame.payload())) {
+            let (offset, bytes) = block?;
+            blocks.push((seq, offset, bytes.len()));
         }
-        PacketKind::Data => {}
-    }
 
-    for (seq, block) in (header.sequence..).zip(header.blocks(datagram)) {
-        let payload = block?;
-        handle_message(reassembler, gap_handler, arbiter, ready, stream_id, seq, payload)?;
-    }
-    Ok(())
-}
+        self.current_datagram = Some(frame);
+        self.current_arc = None;
+        self.current_pending = 0;
 
-fn handle_message(
-    reassembler: &mut SequenceReassembler<Vec<u8>>,
-    gap_handler: &mut GapRequestHandler,
-    arbiter: &mut Option<AbArbiter>,
-    ready: &mut VecDeque<ReadyItem>,
-    stream_id: u8,
-    seq: u64,
-    payload: &[u8],
-) -> Result<(), MoldUdpError> {
-    if let Some(arbiter) = arbiter {
-        match arbiter.observe(stream_id, seq, Instant::now()) {
-            ArbiterVerdict::Duplicate | ArbiterVerdict::OutOfWindow => return Ok(()),
-            ArbiterVerdict::Forward => {}
+        for (seq, offset, len) in blocks {
+            if let Some(arbiter) = self.arbiter.as_mut() {
+                match arbiter.observe(stream_id, seq, Instant::now()) {
+                    ArbiterVerdict::Duplicate | ArbiterVerdict::OutOfWindow => continue,
+                    ArbiterVerdict::Forward => {}
+                }
+            }
+
+            let expected = self.reassembler.expected_next();
+            if seq > expected {
+                self.gap_handler.record_missing_range(expected, seq);
+                self.ready.push_back(ReadyItem::Gap);
+            }
+            self.gap_handler.mark_received(seq);
+
+            match seq.cmp(&self.reassembler.expected_next()) {
+                std::cmp::Ordering::Equal => {
+                    self.reassembler.advance_expected(1);
+                    self.ready.push_back(ReadyItem::Inline {
+                        sequence: seq,
+                        stream_id,
+                        offset,
+                        len,
+                    });
+                    self.current_pending += 1;
+                    for (next_seq, view) in (seq + 1..).zip(self.reassembler.drain_ready()) {
+                        self.ready.push_back(ReadyItem::View {
+                            view,
+                            sequence: next_seq,
+                            stream_id,
+                        });
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    let arc = self.arc_current();
+                    let view = MessageView::new(arc, offset, len);
+                    if let Some(cursor) = self.reassembler.insert(seq, view)? {
+                        for (next_seq, view) in (seq..).zip(cursor) {
+                            self.ready.push_back(ReadyItem::View {
+                                view,
+                                sequence: next_seq,
+                                stream_id,
+                            });
+                        }
+                    }
+                }
+                std::cmp::Ordering::Less => {} // stale duplicate, drop
+            }
         }
-    }
 
-    let expected = reassembler.expected_next();
-    if seq > expected {
-        gap_handler.record_missing_range(expected, seq);
-        ready.push_back(ReadyItem::Gap);
-    }
-    gap_handler.mark_received(seq);
-
-    if let Some(cursor) = reassembler.insert(seq, payload.to_vec())? {
-        for (offset, item) in cursor.enumerate() {
-            ready.push_back(ReadyItem::Frame {
-                sequence: seq + offset as u64,
-                stream_id,
-                payload: item,
-            });
+        if self.current_pending == 0 {
+            self.current_datagram = None;
+            self.current_arc = None;
         }
+        Ok(())
     }
-    Ok(())
 }

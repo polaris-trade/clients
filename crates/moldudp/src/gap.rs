@@ -5,10 +5,12 @@
 //! MoldUDP64 Request Packets, capped per-gap so a stuck gap can't flood the
 //! re-request server.
 
-use std::collections::{BTreeMap, HashMap};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::{Duration, Instant},
+};
 
-use transport_core::Transport;
+use transport_core::TransportCore;
 
 use crate::error::MoldUdpError;
 
@@ -105,7 +107,7 @@ impl GapRequestEmitter {
 
     /// Send a Request Packet for each gap not currently rate-limited. Returns
     /// how many were actually sent.
-    pub async fn emit<T: Transport>(
+    pub async fn emit<T: TransportCore>(
         &mut self,
         gaps: &[GapRequest],
         session: [u8; 10],
