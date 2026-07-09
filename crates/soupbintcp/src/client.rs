@@ -205,6 +205,17 @@ impl<T: StreamSource> SoupBinClient<T> {
         Ok(None)
     }
 
+    /// Earliest instant the caller must act on: the sooner of the next client
+    /// heartbeat being due (`heartbeat_interval` since last send) and the
+    /// server-silence deadline (`heartbeat_timeout` since last recv). Drive a
+    /// custom runtime by selecting `recv` against a sleep to this, then calling
+    /// `tick_heartbeat`. The `tokio` feature wires this up as `recv_managed`.
+    pub fn next_deadline(&self) -> Instant {
+        let send_due = self.last_send + self.cfg.heartbeat_interval;
+        let recv_due = self.last_recv + self.cfg.heartbeat_timeout;
+        send_due.min(recv_due)
+    }
+
     /// Peeks the length prefix (guarding `max_frame_size`) and tries `wire::parse_packet`.
     /// On a full packet, splits it out of `decode_buf` (zero-copy via `BytesMut`).
     fn take_one_packet(&mut self) -> Result<Option<(PacketType, BytesMut)>, SoupBinError> {
@@ -311,6 +322,46 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
         }
     }
 
+    /// Streaming recv with heartbeats handled for you: loop this one call and
+    /// the session stays alive without a separate timer. Selects the next data
+    /// frame / event against the heartbeat deadline; when the deadline wins it
+    /// sends the client heartbeat and checks server silence (surfacing
+    /// `HeartbeatTimeout` on a dead link), then resumes waiting. Removes the
+    /// footgun of a `recv`-only loop that never sends `R` and gets dropped by
+    /// the server after ~15s. Data wins ties, so a coincident heartbeat never
+    /// delays a frame. For non-tokio runtimes, drive `recv` + `next_deadline` +
+    /// `tick_heartbeat` yourself.
+    #[cfg(feature = "tokio")]
+    pub async fn recv_managed(&mut self) -> Result<SoupBinMessage<'_>, SoupBinError> {
+        if self.state == ClientState::Closed {
+            return Err(SoupBinError::EndOfSession);
+        }
+        loop {
+            match self.dispatch_buffered()? {
+                PacketOutcome::Data { sequence } => {
+                    return Ok(SoupBinMessage::Data(Frame {
+                        payload: &self.last_frame,
+                        sequence,
+                    }));
+                }
+                PacketOutcome::Event(event) => return Ok(SoupBinMessage::Event(event)),
+                PacketOutcome::NoProgress => {}
+            }
+            // Nothing buffered: wait for readiness or the heartbeat deadline,
+            // whichever comes first. `await_more_bytes` returns unit, so no
+            // self-borrow escapes the select into the tick handler; data is
+            // returned at the loop top, never from inside select.
+            let deadline = self.next_deadline();
+            tokio::select! {
+                biased;
+                ready = self.await_more_bytes() => ready?,
+                _ = tokio::time::sleep_until(deadline.into()) => {
+                    self.tick_heartbeat().await?;
+                }
+            }
+        }
+    }
+
     async fn login(&mut self) -> Result<(), SoupBinError> {
         self.state = ClientState::Authenticating;
         let payload = build_login_request(&self.cfg);
@@ -336,7 +387,11 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
                         let code = parse_ascii_field(&bytes)?.to_string();
                         return Err(SoupBinError::LoginRejected { code });
                     }
-                    PacketType::Debug => continue,
+                    // Debug drops silently; a server heartbeat before the
+                    // accept (slow server, >1s) is tolerated as liveness, not a
+                    // violation. `ingest_transport_frame` already refreshed
+                    // `last_recv`.
+                    PacketType::Debug | PacketType::ServerHeartbeat => continue,
                     other => {
                         return Err(SoupBinError::ProtocolViolation(format!(
                             "unexpected packet type during login: {other:?}"

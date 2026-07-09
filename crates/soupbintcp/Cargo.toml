@@ -19,10 +19,17 @@ humantime-serde = "1.1.1"
 thiserror = "2.0.18"
 parking_lot = "0.12.5"
 flate2 = { version = "1.1.9", optional = true }
+tokio = { version = "1.52.3", default-features = false, features = [
+  "time",
+  "macros",
+], optional = true }
 
 [features]
 default = []
 compressed = ["dep:flate2"]
+# Opt-in tokio driver: `recv_managed` fuses recv with heartbeat send + server
+# silence detection in one select loop. Core stays runtime-free without it.
+tokio = ["dep:tokio"]
 
 [dev-dependencies]
 transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.3.4" }

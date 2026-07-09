@@ -34,6 +34,32 @@ async fn login_accepted() {
 }
 
 #[tokio::test]
+async fn server_heartbeat_before_login_accepted_is_tolerated() {
+    // A slow server may emit a heartbeat before the Login Accepted; the client
+    // must treat it as liveness, not a protocol violation, and still log in.
+    let (listener, addr) = common::bind_listener().await;
+    let server = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let mut mock = MockServer::new(sock);
+        let mut buf = [0u8; 128];
+        let _ = mock.read(&mut buf).await;
+        mock.write_packet(&common::build_packet(b'H', &[])).await;
+        mock.write_packet(&common::login_accepted_packet("sess001", 3))
+            .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    });
+
+    let transport = common::connect_client(addr).await;
+    let client = SoupBinClient::connect(transport, common::test_config())
+        .await
+        .expect("heartbeat before accept must not fail login");
+    assert_eq!(client.session(), "sess001");
+    assert_eq!(client.next_expected_sequence(), 3);
+
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn login_rejected() {
     let (listener, addr) = common::bind_listener().await;
     let server = tokio::spawn(async move {

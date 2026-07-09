@@ -16,9 +16,11 @@ See [[src/wire.rs#PacketType]], [[src/wire.rs#parse_packet]].
 
 The struct and its base `impl` (send, heartbeat, `poll_recv`) need only `StreamSource`. A second `impl<T: StreamSource + AsyncReady>` block adds `connect`/`recv`, gated behind the readiness adapter.
 
-`connect` sends `Login Request`, awaits `Login Accepted` / `Login Rejected` / timeout, then transitions Disconnected -> Authenticating -> Streaming. Sequenced data increments an internal counter (seeded from the login response) so reconnect can request the right resume point via `next_expected_sequence`.
+`connect` sends `Login Request`, awaits `Login Accepted` / `Login Rejected` / timeout, then transitions Disconnected -> Authenticating -> Streaming. Debug packets and a server heartbeat arriving before the accept are tolerated during the wait, not treated as violations. Sequenced data increments an internal counter (seeded from the login response) so reconnect can request the right resume point via `next_expected_sequence`; `requested_sequence_number` defaults to 1 (replay from session start).
 
 Two ways to drain the streaming state: `recv` (async, needs `AsyncReady`) awaits transport readiness between packets. `poll_recv` (sync, needs only `StreamSource`) makes one non-blocking dispatch-or-`recv_into` attempt and returns `Ok(None)` on no progress, so a sync-only backend can busy-spin it. Both share one packet-dispatch helper so framing logic isn't duplicated.
+
+Heartbeats are caller-driven so the core owns no clock: `tick_heartbeat` sends the client `R` when due and errors on server silence, and `next_deadline` reports the next instant to act on. A custom runtime selects `recv` against a sleep to `next_deadline`, then calls `tick_heartbeat`. Under the opt-in `tokio` feature, `recv_managed` fuses that into one loopable call (data wins ties), removing the footgun of a `recv`-only loop that never sends `R` and gets dropped by the server.
 
 See [[src/client.rs#SoupBinClient]], [[src/frame.rs#Frame]].
 

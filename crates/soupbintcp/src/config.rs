@@ -14,6 +14,10 @@ pub struct SoupBinClientConfig {
     pub username: String,
     pub password: String,
     pub requested_session: String,
+    /// Sequence to request first at login. `1` replays the session from the
+    /// start (default); `0` starts at the most recently generated message
+    /// (live tail, no backlog); on reconnect set this to
+    /// `next_expected_sequence()` to resume where the dropped socket left off.
     pub requested_sequence_number: u64,
 
     #[serde(with = "humantime_serde")]
@@ -35,7 +39,7 @@ impl Default for SoupBinClientConfig {
             username: String::new(),
             password: String::new(),
             requested_session: String::new(),
-            requested_sequence_number: 0,
+            requested_sequence_number: 1,
             login_timeout: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(1),
             heartbeat_timeout: Duration::from_secs(15),
