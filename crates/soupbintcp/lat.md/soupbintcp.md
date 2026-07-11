@@ -55,3 +55,15 @@ Optional NASDAQ compressed-feed support: server-to-client bytes flow through a s
 Under the `compressed` feature, `CompressedReader` wraps the transport's read side with `Decompress::new(true)` (zlib framing, not raw deflate). Upstream writes (login, heartbeats, unsequenced data, logout) always bypass the inflator: compression is server-to-client only.
 
 See [[src/compressed.rs#CompressedReader]].
+
+## Telemetry
+
+Gated `observability-core` wiring: message count on the sequenced-data yield path, lifecycle counters on login/heartbeat/logout/end-of-session, zero cost when the metrics gate is off.
+
+The `SequencedData` arm in `dispatch_buffered` guards a `count_msg` plus sampled `merge_local` (1-in-8192) behind `metrics_enabled()`; this is the single yield site shared by `recv`, `poll_recv`, and `recv_managed`, so no path double-counts. `login`, `tick_heartbeat`, `logout`, and the `EndOfSession` arm each emit a guarded `metrics::counter!`, plus (except heartbeats, too frequent to log per tick) a cold-path `tracing::info!`. No per-message span.
+
+Metric names: `client.messages` (drained from `count_msg`, `protocol` label), `client.heartbeats` (`protocol` label), `client.sessions` (`protocol` + `event` labels, `event` one of `login`/`logout`/`eos`). `protocol` is always `"soupbintcp"`.
+
+`examples/recv_metrics.rs` drives a bounded login -> data -> end-of-session run over a real `TokioTransport` against the test-only `MockServer`, with `observability::init` serving a Prometheus scrape on `127.0.0.1:9464`.
+
+See [[src/client.rs#SoupBinClient]].

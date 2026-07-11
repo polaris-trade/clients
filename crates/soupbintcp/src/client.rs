@@ -24,6 +24,9 @@ use crate::{
     wire::{self, PacketType},
 };
 
+/// `protocol` label value on every `client.*` metric this crate emits.
+const PROTOCOL: &str = "soupbintcp";
+
 /// Session lifecycle stage. Streaming is the only stage where `recv` yields `Frame`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
@@ -147,6 +150,14 @@ impl<T: StreamSource> SoupBinClient<T> {
                     let sequence = self.next_expected_sequence;
                     self.next_expected_sequence += 1;
                     self.last_frame = bytes;
+                    // single yield site shared by recv/poll_recv/recv_managed, so
+                    // one guarded count covers every caller with no double count.
+                    if observability_core::metrics_enabled() {
+                        observability_core::count_msg();
+                        if observability_core::should_sample(observability_core::SAMPLE_1_IN_8192) {
+                            observability_core::merge_local();
+                        }
+                    }
                     return Ok(PacketOutcome::Data { sequence });
                 }
                 PacketType::ServerHeartbeat => {
@@ -154,6 +165,11 @@ impl<T: StreamSource> SoupBinClient<T> {
                 }
                 PacketType::EndOfSession => {
                     self.state = ClientState::Closed;
+                    if observability_core::metrics_enabled() {
+                        metrics::counter!("client.sessions", "protocol" => PROTOCOL, "event" => "eos")
+                            .increment(1);
+                    }
+                    tracing::info!(protocol = PROTOCOL, session = %self.session, "soupbintcp end of session");
                     return Ok(PacketOutcome::Event(SoupBinEvent::EndOfSession));
                 }
                 PacketType::Debug => continue,
@@ -184,6 +200,11 @@ impl<T: StreamSource> SoupBinClient<T> {
         }
         self.write_packet(b'O', &[]).await?;
         self.state = ClientState::Closed;
+        if observability_core::metrics_enabled() {
+            metrics::counter!("client.sessions", "protocol" => PROTOCOL, "event" => "logout")
+                .increment(1);
+        }
+        tracing::info!(protocol = PROTOCOL, session = %self.session, "soupbintcp logout");
         Ok(())
     }
 
@@ -200,6 +221,10 @@ impl<T: StreamSource> SoupBinClient<T> {
         }
         if self.last_send.elapsed() > self.cfg.heartbeat_interval {
             self.write_packet(b'R', &[]).await?;
+            // counter only: heartbeats are frequent enough that a per-tick log would flood.
+            if observability_core::metrics_enabled() {
+                metrics::counter!("client.heartbeats", "protocol" => PROTOCOL).increment(1);
+            }
             return Ok(Some(SoupBinEvent::HeartbeatSent));
         }
         Ok(None)
@@ -381,6 +406,16 @@ impl<T: StreamSource + AsyncReady> SoupBinClient<T> {
                         self.next_expected_sequence = parse_ascii_numeric(&bytes[10..30])?;
                         self.last_recv = Instant::now();
                         self.state = ClientState::Streaming;
+                        if observability_core::metrics_enabled() {
+                            metrics::counter!("client.sessions", "protocol" => PROTOCOL, "event" => "login")
+                                .increment(1);
+                        }
+                        tracing::info!(
+                            protocol = PROTOCOL,
+                            session = %self.session,
+                            next_expected_sequence = self.next_expected_sequence,
+                            "soupbintcp login accepted"
+                        );
                         return Ok(());
                     }
                     PacketType::LoginRejected => {

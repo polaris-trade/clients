@@ -12,7 +12,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-transport_core = { git = "https://github.com/polaris-trade/transport-core", tag = "transport_core-v0.3.2" }
+transport_core = { git = "https://github.com/polaris-trade/transport-core", tag = "transport_core-v0.4.0" }
 bytes = "1.12.1"
 serde = { version = "1.0.228", features = ["derive"] }
 humantime-serde = "1.1.1"
@@ -23,6 +23,11 @@ tokio = { version = "1.52.3", default-features = false, features = [
   "time",
   "macros",
 ], optional = true }
+observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-core-v0.2.0", features = [
+  "flush-tokio",
+] }
+metrics = "0.24"
+tracing = "0.1"
 
 [features]
 default = []
@@ -32,7 +37,8 @@ compressed = ["dep:flate2"]
 tokio = ["dep:tokio"]
 
 [dev-dependencies]
-transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.3.4" }
+transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.4.0" }
+observability = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.0" }
 mockall = "0.15"
 rstest = "0.26.1"
 tokio = { version = "1.52.3", features = [
@@ -44,6 +50,10 @@ tokio = { version = "1.52.3", features = [
 serde_json = "1.0"
 toml = "1.1.2+spec-1.1.0"
 allocation-counter = "0.8.1"
+
+[[example]]
+name = "recv_metrics"
+required-features = ["tokio"]
 
 # High-performance release profile. See root AGENTS.md#High-Performance Rules.
 # Cross-crate inlining + one codegen unit + abort-on-panic. Slower compile,

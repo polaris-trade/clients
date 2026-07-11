@@ -8,4 +8,4 @@ This directory defines the high-level concepts, business logic, and architecture
 
 Architecture docs for this crate, one topic per link below.
 
-- [[soupbintcp]] — wire codec, client state machine and login, heartbeat/logout/end-of-session, error/config, compressed variant.
+- [[soupbintcp]] — wire codec, client state machine and login, heartbeat/logout/end-of-session, error/config, compressed variant, telemetry.
