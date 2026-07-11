@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.3.0](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.3...client_moldudp-v0.3.0) (2026-07-11)
+
+
+### Features
+
+* **telemetry:** add recv-counter ([#10](https://github.com/polaris-trade/client-moldudp/issues/10)) ([26c4e01](https://github.com/polaris-trade/client-moldudp/commit/26c4e01a85ddeaecc95a22ddac1f0f7bb2e624a4))
+
 ## [0.2.3](https://github.com/polaris-trade/client-moldudp/compare/client_moldudp-v0.2.2...client_moldudp-v0.2.3) (2026-07-09)
 
 
