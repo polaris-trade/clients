@@ -45,6 +45,15 @@ Assembles wire codec, reassembler, gap tracking, and optional arbiter into one `
 - [[src/receiver.rs#MoldUdpReceiver]]: `new` (binds legs, joins multicast when configured), `recv` (borrowed), `recv_owned` (cross-thread handoff), `stats`, `emit_pending_gaps`. `expected_next` anchors to `cfg.start_sequence` when set, else to the first packet's sequence, so a mid-session join does not treat the backlog as one giant gap. A datagram whose leading sequence is already `expected_next` drains inline, borrowed from the still-owned frame (zero alloc); one landing ahead promotes its frame to a single `Arc` and buffers `MessageView`s until the gap fills, cascade-draining on fill. The recv pool is sized at the reorder window plus burst headroom and asserted at construction.
 - [[src/receiver.rs#MoldUdpOutcome]] — what `recv`/`recv_owned` hand back: `Frame` (borrowed) / `Owned` (moves a message to another thread) / `Event`.
 
+## Telemetry
+
+Gated, thread-local recv instrumentation via `observability-core`: a `Cell` read when the metrics gate is off, self-draining into a shared registry when on.
+
+- [[src/receiver.rs#record_message]] — per-yielded-message `count_msg` plus a 1-in-8192 sampled `merge_local`. Called at both `recv` and `recv_owned` yield sites (`Inline`/`View` arms only, never `Event`/`Gap`), so it counts once per message actually handed to the caller, not once per reaped datagram.
+- [[src/receiver.rs#record_gap]] — increments the `client.gaps` counter (`protocol = "moldudp"`), once per `ReadyItem::Gap` pushed: tail loss from a heartbeat/end-of-session (`note_tail_gap`), a single-stream sequence jump (`process_next_pending`), or a confirmed multi-stream miss (`drain_confirmed_gaps`).
+- No per-message `tracing` span: spans allocate and take a dispatcher lock even off-gate. `ReceiverStats`/`ArbiterStats` above are domain snapshots of arbiter/gap state, not telemetry counters, and are untouched by this.
+- `examples/recv_metrics.rs` drives `tests/support/mod.rs::MockTransport` through both an in-order run and a skipped-sequence gap, then serves a Prometheus scrape at `127.0.0.1:9464`.
+
 ## Error, config, event, frame types
 
 Shared shapes: typed errors, serde-first receiver config, control events, and the borrowed consumer-facing frame.

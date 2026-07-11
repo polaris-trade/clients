@@ -40,6 +40,31 @@ const RING_CAPACITY: usize = 4096;
 /// reorder window is pinned by buffered messages while a fresh burst lands.
 const MAX_INFLIGHT_BURST: usize = 64;
 
+/// Record one message actually yielded to the caller: gated thread-local
+/// `count_msg` plus a 1-in-8192 sampled `merge_local` so a flusher on another
+/// thread eventually sees the total without the caller wiring a merge tick.
+/// No-op (single `Cell` read) when the metrics gate is off.
+#[inline]
+fn record_message() {
+    if observability_core::metrics_enabled() {
+        observability_core::count_msg();
+        if observability_core::should_sample(observability_core::SAMPLE_1_IN_8192) {
+            observability_core::merge_local();
+        }
+    }
+}
+
+/// Record one client-visible gap: tail loss from a heartbeat/end-of-session,
+/// a single-stream sequence jump, or a confirmed multi-stream miss. Called
+/// once per `ReadyItem::Gap` pushed, so the counter matches the number of
+/// `MoldUdpError::GapDetected` a caller actually observes.
+#[inline]
+fn record_gap() {
+    if observability_core::metrics_enabled() {
+        metrics::counter!("client.gaps", "protocol" => "moldudp").increment(1);
+    }
+}
+
 /// One drained item waiting to be handed to a caller via `recv`/`recv_owned`.
 /// `Inline` borrows from whichever of `current_datagram`/`current_arc` is
 /// currently backing it (zero-alloc, in-order fast path); `View` carries its
@@ -354,6 +379,7 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                 len,
             } => {
                 let payload = self.resolve_current(*offset, *len);
+                record_message();
                 Ok(MoldUdpOutcome::Frame(Frame {
                     payload,
                     sequence: *sequence,
@@ -364,11 +390,14 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                 view,
                 sequence,
                 stream_id,
-            } => Ok(MoldUdpOutcome::Frame(Frame {
-                payload: view.as_ref(),
-                sequence: *sequence,
-                stream_id: *stream_id,
-            })),
+            } => {
+                record_message();
+                Ok(MoldUdpOutcome::Frame(Frame {
+                    payload: view.as_ref(),
+                    sequence: *sequence,
+                    stream_id: *stream_id,
+                }))
+            }
             ReadyItem::Event(ev) => Ok(MoldUdpOutcome::Event(*ev)),
             ReadyItem::Gap => Err(MoldUdpError::GapDetected),
         }
@@ -412,6 +441,7 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                     self.current_arc = None;
                 }
                 let view = MessageView::new(arc, offset, len);
+                record_message();
                 Ok(MoldUdpOutcome::Owned(OwnedFrame {
                     view,
                     sequence,
@@ -422,11 +452,14 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                 view,
                 sequence,
                 stream_id,
-            } => Ok(MoldUdpOutcome::Owned(OwnedFrame {
-                view,
-                sequence,
-                stream_id,
-            })),
+            } => {
+                record_message();
+                Ok(MoldUdpOutcome::Owned(OwnedFrame {
+                    view,
+                    sequence,
+                    stream_id,
+                }))
+            }
             ReadyItem::Event(ev) => Ok(MoldUdpOutcome::Event(ev)),
             ReadyItem::Gap => Err(MoldUdpError::GapDetected),
         }
@@ -463,6 +496,7 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
             self.gap_handler
                 .record_missing_range(expected, next_expected);
             self.ready.push_back(ReadyItem::Gap);
+            record_gap();
         }
     }
 
@@ -477,6 +511,7 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
         for seq in confirmed {
             self.gap_handler.record_gap(seq);
             self.ready.push_back(ReadyItem::Gap);
+            record_gap();
         }
     }
 
@@ -594,6 +629,7 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
                     self.gap_handler
                         .record_missing_range(expected0, header.sequence);
                     self.ready.push_back(ReadyItem::Gap);
+                    record_gap();
                 }
             }
         }
