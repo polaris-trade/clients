@@ -169,6 +169,7 @@ dependencies = [
  "toml",
  "transport_core",
  "transport_tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -193,6 +194,7 @@ dependencies = [
  "tracing",
  "transport_core",
  "transport_tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2438,6 +2440,29 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-utils",
+ "memchr",
+ "observability-core 0.2.0 (git+https://github.com/polaris-trade/observability?tag=observability-core-v0.2.0)",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "serde_core",
+ "smallvec",
+ "syn",
+ "tokio",
+ "toml_datetime",
+ "toml_parser",
+ "tracing-core",
+ "transport_core",
+ "windows-sys 0.61.2",
+ "winnow",
+]
 
 [[package]]
 name = "writeable"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/moldudp", "crates/soupbintcp"]
+members = ["crates/moldudp", "crates/soupbintcp", "workspace-hack"]
 
 [workspace.package]
 edition = "2024"
