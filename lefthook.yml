@@ -29,8 +29,16 @@ pre-commit:
       glob: "*.rs"
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-    lat-check:
-      run: lat check
+    oss-gate:
+      # PUBLIC repo: no private backend crate name may leak into source or docs.
+      run: |
+        if rg -n 'transport_(io_uring|afxdp|dpdk)' -g '*.rs' -g '*.toml' -g '*.md' .; then
+          echo "private crate name found in a public repo. Remove it."; exit 1
+        fi
+
+    # NOTE: lat-check is intentionally absent until the root lat.md/ merge lands.
+    # Re-add `lat-check: { run: lat check }` here once crates/*/lat.md/ is merged
+    # into one root lat.md/ graph.
 
 # ---------------------------------------------------------------------------
 # commit-msg — Conventional Commits gate. `convco` = pure-Rust linter.

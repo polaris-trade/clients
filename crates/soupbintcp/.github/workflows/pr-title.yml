@@ -1,9 +1,0 @@
-name: pr-title
-
-on:
-  pull_request:
-    types: [opened, edited, reopened, synchronize]
-
-jobs:
-  lint:
-    uses: polaris-trade/ci/.github/workflows/pr-title.yml@main
