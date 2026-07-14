@@ -1,0 +1,64 @@
+# client-moldudp
+
+MoldUDP64 client: wire codec, sequence reassembler, gap re-request, A/B arbiter, and a backend-generic receiver over `transport_core::DatagramSource`.
+
+## Wire codec
+
+Parses the 20-byte MoldUDP64 downstream header and iterates message blocks straight out of the datagram slice, zero-alloc.
+
+- [[crates/moldudp/src/wire.rs#DownstreamHeader]] — session, sequence, message count.
+- [[crates/moldudp/src/wire.rs#parse_header]] — rejects short/oversized datagrams.
+- [[crates/moldudp/src/wire.rs#PacketKind]] — heartbeat / end-of-session / data classification.
+- [[crates/moldudp/src/wire.rs#MessageBlockIter]] — borrowed message block iterator; yields `(offset, block)`, `offset` being the block's byte position within the datagram so a slot can retain a slab view instead of a copy.
+
+## Sequence reassembler
+
+Fixed-capacity slot ring keyed by `seq % capacity`; drains contiguous runs, drops stale duplicates, and rejects inserts that would clobber a pending slot.
+
+- [[crates/moldudp/src/reassembly.rs#SequenceReassembler]] — insert/drain over an owned slab handle `S` (the receiver instantiates `S = MessageView`). `advance_expected` moves `expected_next` for the in-order fast path without an insert, so an in-order datagram never forces an `Arc`; `drain_ready` cascade-drains views buffered ahead once that advance fills the gap.
+- [[crates/moldudp/src/reassembly.rs#DrainCursor]] — lazy drain iterator, finishes on drop like `Vec::drain`.
+
+## Gap handling
+
+Tracks missing sequence ranges and turns them into rate-limited MoldUDP64 Request Packets so re-request traffic can't flood the server.
+
+Gaps come from three places: a data packet whose leading sequence jumps past `expected_next`, and heartbeat / end-of-session packets whose next-expected sequence exceeds ours (tail loss during quiet traffic).
+
+- [[crates/moldudp/src/gap.rs#GapRequestHandler]] — records/coalesces/clears missing ranges.
+- [[crates/moldudp/src/gap.rs#GapRequestEmitter]] — per-gap rate-limited unicast re-request.
+
+## A/B arbiter
+
+Sliding bitmap window that dedupes redundant A/B feeds (first arrival wins) and withholds gap confirmation until every stream has missed a sequence for a grace window.
+
+The receiver stages detected gaps via `note_missing_range` and drains `confirmed_gaps` into the gap handler each poll, so a lagging leg gets its window before a re-request fires.
+
+- [[crates/moldudp/src/ab.rs#AbArbiter]] — observe (dedup), note_missing_range / confirmed_gaps (grace-windowed gap staging), rebase (anchor base for mid-session join), stats.
+- [[crates/moldudp/src/ab.rs#ArbiterVerdict]] — Forward / Duplicate / OutOfWindow.
+
+## Receiver
+
+Assembles wire codec, reassembler, gap tracking, and optional arbiter into one `DatagramSource`-generic receiver driven by `recv_burst`. Base construction needs `TransportBind + PoolAccess`; multicast join adds `UdpTransport`.
+
+- [[crates/moldudp/src/receiver.rs#MoldUdpReceiver]]: `new` (binds legs, joins multicast when configured), `recv` (borrowed), `recv_owned` (cross-thread handoff), `stats`, `emit_pending_gaps`. `expected_next` anchors to `cfg.start_sequence` when set, else to the first packet's sequence, so a mid-session join does not treat the backlog as one giant gap. A datagram whose leading sequence is already `expected_next` drains inline, borrowed from the still-owned frame (zero alloc); one landing ahead promotes its frame to a single `Arc` and buffers `MessageView`s until the gap fills, cascade-draining on fill. The recv pool is sized at the reorder window plus burst headroom and asserted at construction.
+- [[crates/moldudp/src/receiver.rs#MoldUdpOutcome]] — what `recv`/`recv_owned` hand back: `Frame` (borrowed) / `Owned` (moves a message to another thread) / `Event`.
+
+## Telemetry
+
+Gated, thread-local recv instrumentation via `observability-core`: a `Cell` read when the metrics gate is off, self-draining into a shared registry when on.
+
+- [[crates/moldudp/src/receiver.rs#record_message]] — per-yielded-message `count_msg` plus a 1-in-8192 sampled `merge_local`. Called at both `recv` and `recv_owned` yield sites (`Inline`/`View` arms only, never `Event`/`Gap`), so it counts once per message actually handed to the caller, not once per reaped datagram.
+- [[crates/moldudp/src/receiver.rs#record_gap]] — increments the `client.gaps` counter (`protocol = "moldudp"`), once per `ReadyItem::Gap` pushed: tail loss from a heartbeat/end-of-session (`note_tail_gap`), a single-stream sequence jump (`process_next_pending`), or a confirmed multi-stream miss (`drain_confirmed_gaps`).
+- No per-message `tracing` span: spans allocate and take a dispatcher lock even off-gate. `ReceiverStats`/`ArbiterStats` above are domain snapshots of arbiter/gap state, not telemetry counters, and are untouched by this.
+- `examples/recv_metrics.rs` drives `tests/support/mod.rs::MockTransport` through both an in-order run and a skipped-sequence gap, then serves a Prometheus scrape at `127.0.0.1:9464`.
+
+## Error, config, event, frame types
+
+Shared shapes: typed errors, serde-first receiver config, control events, and the borrowed consumer-facing frame.
+
+- [[crates/moldudp/src/error.rs#MoldUdpError]] — typed failure kinds, `Transport` wraps `transport_core::TransportError`.
+- [[crates/moldudp/src/config.rs#MoldUdpReceiverConfig]] — serde `Default`-backed receiver config; `start_sequence` sets the initial expected sequence for a mid-session resume.
+- [[crates/moldudp/src/event.rs#MoldUdpEvent]] — `Heartbeat { next_expected }` / `EndOfSession { next_expected }`, both carrying the server's next-expected for tail-loss detection; no `SessionOpen` (session id stays internal).
+- [[crates/moldudp/src/frame.rs#Frame]] — borrowed consumer-facing frame, implements `AsPayload`.
+- [[crates/moldudp/src/frame.rs#MessageView]] — refcounted view into a datagram slab (`Arc<F>` + offset/len), the owned reassembler slot that replaces per-message `to_vec`.
+- [[crates/moldudp/src/frame.rs#OwnedFrame]] — owned message handle carried by `MoldUdpOutcome::Owned` for cross-thread handoff.

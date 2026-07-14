@@ -8,7 +8,7 @@ Parses the logical packet framing `Length[2 BE] + Type[1] + Payload` from a raw 
 
 `PacketType` decodes the type byte via `TryFrom<u8>`, rejecting unknown bytes as a structured error instead of panicking. `parse_packet` is pure: no I/O, no config, callers own the accumulation buffer.
 
-See [[src/wire.rs#PacketType]], [[src/wire.rs#parse_packet]].
+See [[crates/soupbintcp/src/wire.rs#PacketType]], [[crates/soupbintcp/src/wire.rs#parse_packet]].
 
 ## Client state machine and login
 
@@ -22,7 +22,7 @@ Two ways to drain the streaming state: `recv` (async, needs `AsyncReady`) awaits
 
 Heartbeats are caller-driven so the core owns no clock: `tick_heartbeat` sends the client `R` when due and errors on server silence, and `next_deadline` reports the next instant to act on. A custom runtime selects `recv` against a sleep to `next_deadline`, then calls `tick_heartbeat`. Under the opt-in `tokio` feature, `recv_managed` fuses that into one loopable call (data wins ties), removing the footgun of a `recv`-only loop that never sends `R` and gets dropped by the server.
 
-See [[src/client.rs#SoupBinClient]], [[src/frame.rs#Frame]].
+See [[crates/soupbintcp/src/client.rs#SoupBinClient]], [[crates/soupbintcp/src/frame.rs#Frame]].
 
 ## One-landing stream ingest
 
@@ -30,7 +30,7 @@ Bytes come off the wire via `StreamSource::recv_into`, not a resident transport 
 
 Uncompressed: reserves `decode_buf_capacity` spare bytes on `decode_buf` then lands `recv_into` straight into that spare region (`advance_mut` marks the exact count init), one copy, no intermediate buffer, and `decode_buf`'s own `BytesMut::split_to` framing downstream stays refcount-free. The `reserve` before `spare_capacity_mut` is load-bearing: `take_one_packet`'s `split_to` permanently shrinks spare capacity, so skipping it starves `recv_into` to a zero-length slice over repeated packets. Compressed (`compressed` feature): `recv_into` still lands once, but into a separate `recv_staging` buffer first, since `inflate.feed` needs a contiguous compressed frame; the inflate step then copies decoded bytes into `decode_buf`, an unavoidable second copy that the uncompressed path skips.
 
-See [[src/client.rs#SoupBinClient]].
+See [[crates/soupbintcp/src/client.rs#SoupBinClient]].
 
 ## Heartbeat, logout, end of session
 
@@ -38,7 +38,7 @@ Bidirectional heartbeat plus clean session teardown: client-driven ticks, server
 
 `tick_heartbeat` is driven by the caller's own timer: it sends `Client Heartbeat` after `heartbeat_interval` of silence and reports `HeartbeatTimeout` once the server has been silent past `heartbeat_timeout`. `logout` sends `Logout Request` and closes; an `End of Session` packet from the server closes the client and makes further `recv` calls return `EndOfSession`.
 
-See [[src/client.rs#SoupBinClient]], [[src/event.rs#SoupBinEvent]].
+See [[crates/soupbintcp/src/client.rs#SoupBinClient]], [[crates/soupbintcp/src/event.rs#SoupBinEvent]].
 
 ## Error and config
 
@@ -46,7 +46,7 @@ One error enum for every failure path, one config struct with working defaults f
 
 `SoupBinError` covers `Transport`, login/heartbeat failures, and protocol violations, with source chains preserved via `#[from]`. `SoupBinClientConfig` is `Serialize + Deserialize + Default` with `#[serde(default)]` so partial JSON/TOML configs still load, and durations use `humantime_serde` for human-readable values like `"30s"`.
 
-See [[src/error.rs#SoupBinError]], [[src/config.rs#SoupBinClientConfig]].
+See [[crates/soupbintcp/src/error.rs#SoupBinError]], [[crates/soupbintcp/src/config.rs#SoupBinClientConfig]].
 
 ## Compressed variant
 
@@ -54,7 +54,7 @@ Optional NASDAQ compressed-feed support: server-to-client bytes flow through a s
 
 Under the `compressed` feature, `CompressedReader` wraps the transport's read side with `Decompress::new(true)` (zlib framing, not raw deflate). Upstream writes (login, heartbeats, unsequenced data, logout) always bypass the inflator: compression is server-to-client only.
 
-See [[src/compressed.rs#CompressedReader]].
+See [[crates/soupbintcp/src/compressed.rs#CompressedReader]].
 
 ## Telemetry
 
@@ -66,4 +66,4 @@ Metric names: `client.messages` (drained from `count_msg`, `protocol` label), `c
 
 `examples/recv_metrics.rs` drives a bounded login -> data -> end-of-session run over a real `TokioTransport` against the test-only `MockServer`, with `observability::init` serving a Prometheus scrape on `127.0.0.1:9464`.
 
-See [[src/client.rs#SoupBinClient]].
+See [[crates/soupbintcp/src/client.rs#SoupBinClient]].
