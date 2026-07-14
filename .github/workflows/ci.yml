@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    uses: polaris-trade/ci/.github/workflows/rust-ci.yml@main
+
+  # Second leg exercises soupbintcp's compressed + tokio features (and the
+  # recv_metrics example). Distinct concurrency-key so it does not share a
+  # group with the base job and cancel it.
+  rust-features:
+    uses: polaris-trade/ci/.github/workflows/rust-ci.yml@main
+    with:
+      workspace-args: --all-features
+      concurrency-key: features

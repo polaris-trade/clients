@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = ["crates/moldudp", "crates/soupbintcp", "workspace-hack"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96.1"
+authors = ["0x67 <69191110+0x67@users.noreply.github.com>"]
+repository = "https://github.com/polaris-trade/clients"
+homepage = "https://github.com/polaris-trade"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Shared runtime deps. One pin here covers every member; a bump is one edit.
+transport_core = { git = "https://github.com/polaris-trade/transport-core", tag = "transport_core-v0.4.0" }
+observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-core-v0.2.0", features = [
+  "flush-tokio",
+] }
+metrics = "0.24"
+bytes = "1.12.1"
+serde = { version = "1.0.228", features = ["derive"] }
+humantime-serde = "1.1.1"
+thiserror = "2.0.18"
+parking_lot = "0.12.5"
+
+# Shared dev deps.
+transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.4.0" }
+observability = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.0" }
+mockall = "0.15"
+rstest = "0.26.1"
+# tokio default feature set is empty; each member selects its own features.
+tokio = { version = "1.52.3", default-features = false }
+allocation-counter = "0.8.1"
+serde_json = "1.0.150"
+toml = "1.1.2+spec-1.1.0"
+
+# High-performance release profile. Cross-crate inlining + one codegen unit +
+# abort-on-panic. Slower compile, faster runtime, smaller binary. A workspace
+# allows profiles only at the root, so both members inherit this.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
