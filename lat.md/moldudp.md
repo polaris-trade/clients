@@ -50,7 +50,7 @@ Gated, thread-local recv instrumentation via `observability-core`: a `Cell` read
 - [[crates/moldudp/src/receiver.rs#record_message]] — per-yielded-message `count_msg` plus a 1-in-8192 sampled `merge_local`. Called at both `recv` and `recv_owned` yield sites (`Inline`/`View` arms only, never `Event`/`Gap`), so it counts once per message actually handed to the caller, not once per reaped datagram.
 - [[crates/moldudp/src/receiver.rs#record_gap]] — increments the `client.gaps` counter (`protocol = "moldudp"`), once per `ReadyItem::Gap` pushed: tail loss from a heartbeat/end-of-session (`note_tail_gap`), a single-stream sequence jump (`process_next_pending`), or a confirmed multi-stream miss (`drain_confirmed_gaps`).
 - No per-message `tracing` span: spans allocate and take a dispatcher lock even off-gate. `ReceiverStats`/`ArbiterStats` above are domain snapshots of arbiter/gap state, not telemetry counters, and are untouched by this.
-- `examples/recv_metrics.rs` drives `tests/support/mod.rs::MockTransport` through both an in-order run and a skipped-sequence gap, then serves a Prometheus scrape at `127.0.0.1:9464`.
+- `examples/moldudp_recv_metrics.rs` drives `tests/support/mod.rs::MockTransport` through both an in-order run and a skipped-sequence gap, then serves a Prometheus scrape at `127.0.0.1:9464`.
 
 ## Error, config, event, frame types
 

@@ -64,6 +64,6 @@ The `SequencedData` arm in `dispatch_buffered` guards a `count_msg` plus sampled
 
 Metric names: `client.messages` (drained from `count_msg`, `protocol` label), `client.heartbeats` (`protocol` label), `client.sessions` (`protocol` + `event` labels, `event` one of `login`/`logout`/`eos`). `protocol` is always `"soupbintcp"`.
 
-`examples/recv_metrics.rs` drives a bounded login -> data -> end-of-session run over a real `TokioTransport` against the test-only `MockServer`, with `observability::init` serving a Prometheus scrape on `127.0.0.1:9464`.
+`examples/soupbintcp_recv_metrics.rs` drives a bounded login -> data -> end-of-session run over a real `TokioTransport` against the test-only `MockServer`, with `observability::init` serving a Prometheus scrape on `127.0.0.1:9464`.
 
 See [[crates/soupbintcp/src/client.rs#SoupBinClient]].

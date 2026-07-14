@@ -43,5 +43,5 @@ toml.workspace = true
 allocation-counter.workspace = true
 
 [[example]]
-name = "recv_metrics"
+name = "soupbintcp_recv_metrics"
 required-features = ["tokio"]
