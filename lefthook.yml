@@ -30,9 +30,11 @@ pre-commit:
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
     oss-gate:
-      # PUBLIC repo: no private backend crate name may leak into source or docs.
+      # PUBLIC repo: no private backend crate name may leak into shipped source
+      # or docs. AGENTS.md/CLAUDE.md are excluded: their visibility header names
+      # the private crates on purpose, as the forbidden list.
       run: |
-        if rg -n 'transport_(io_uring|afxdp|dpdk)' -g '*.rs' -g '*.toml' -g '*.md' .; then
+        if rg -n 'transport_(io_uring|afxdp|dpdk)' -g '*.rs' -g '*.toml' -g '*.md' -g '!AGENTS.md' -g '!CLAUDE.md' .; then
           echo "private crate name found in a public repo. Remove it."; exit 1
         fi
 
