@@ -12,7 +12,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Shared runtime deps. One pin here covers every member; a bump is one edit.
-transport_core = { git = "https://github.com/polaris-trade/transport-core", tag = "transport_core-v0.4.0" }
+transport_core = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.1" }
 observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-core-v0.2.0", features = [
   "flush-tokio",
 ] }
@@ -24,7 +24,7 @@ thiserror = "2.0.18"
 parking_lot = "0.12.5"
 
 # Shared dev deps.
-transport_tokio = { git = "https://github.com/polaris-trade/transport-tokio", tag = "transport_tokio-v0.4.0" }
+transport_tokio = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.1" }
 observability = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.0" }
 mockall = "0.15"
 rstest = "0.26.1"
