@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.4.1](https://github.com/polaris-trade/clients/compare/client_moldudp-v0.4.0...client_moldudp-v0.4.1) (2026-07-15)
+
+
+### Bug fixes
+
+* **deps:** source transport_core and transport_tokio from the transports workspace ([#4](https://github.com/polaris-trade/clients/issues/4)) ([bca1972](https://github.com/polaris-trade/clients/commit/bca19729f06eff4f97ee578afa58aa86faeaf9e6))
+
 ## [0.4.0](https://github.com/polaris-trade/clients/compare/client_moldudp-v0.3.0...client_moldudp-v0.4.0) (2026-07-14)
 
 
