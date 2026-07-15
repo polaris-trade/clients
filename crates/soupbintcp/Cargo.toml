@@ -12,6 +12,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+# transport_core + transport_tokio resolve from the consolidated transports workspace (root [workspace.dependencies]).
 transport_core.workspace = true
 bytes.workspace = true
 serde.workspace = true
