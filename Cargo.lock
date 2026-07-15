@@ -169,7 +169,7 @@ dependencies = [
  "toml",
  "transport_core",
  "transport_tokio",
- "workspace-hack",
+ "workspace-hack 0.1.0",
 ]
 
 [[package]]
@@ -194,7 +194,7 @@ dependencies = [
  "tracing",
  "transport_core",
  "transport_tokio",
- "workspace-hack",
+ "workspace-hack 0.1.0",
 ]
 
 [[package]]
@@ -929,6 +929,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -1740,9 +1741,9 @@ checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
-version = "2.0.118"
+version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2152,19 +2153,20 @@ dependencies = [
 
 [[package]]
 name = "transport_core"
-version = "0.4.0"
-source = "git+https://github.com/polaris-trade/transport-core?tag=transport_core-v0.4.0#5fbf42ecef4308c7cae6999dc7b72edc0bb7cfb5"
+version = "0.4.1"
+source = "git+https://github.com/polaris-trade/transports?tag=transport_tokio-v0.4.1#94fa13136a18162cd07b7738673bc4c27f5c71ec"
 dependencies = [
  "metrics",
  "observability-core 0.2.0 (git+https://github.com/polaris-trade/observability?tag=observability-core-v0.2.0)",
  "serde",
  "thiserror",
+ "workspace-hack 0.1.0 (git+https://github.com/polaris-trade/transports?tag=transport_tokio-v0.4.1)",
 ]
 
 [[package]]
 name = "transport_tokio"
-version = "0.4.0"
-source = "git+https://github.com/polaris-trade/transport-tokio?tag=transport_tokio-v0.4.0#709e381e06510e29c3c2eab23a73274347fec31b"
+version = "0.4.1"
+source = "git+https://github.com/polaris-trade/transports?tag=transport_tokio-v0.4.1#94fa13136a18162cd07b7738673bc4c27f5c71ec"
 dependencies = [
  "libc",
  "parking_lot",
@@ -2173,6 +2175,7 @@ dependencies = [
  "tokio",
  "tracing",
  "transport_core",
+ "workspace-hack 0.1.0 (git+https://github.com/polaris-trade/transports?tag=transport_tokio-v0.4.1)",
 ]
 
 [[package]]
@@ -2445,23 +2448,35 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
- "crossbeam-utils",
- "memchr",
  "observability-core 0.2.0 (git+https://github.com/polaris-trade/observability?tag=observability-core-v0.2.0)",
+ "serde_core",
+ "toml_datetime",
+ "toml_parser",
+ "transport_core",
+ "winnow",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+source = "git+https://github.com/polaris-trade/transports?tag=transport_tokio-v0.4.1#94fa13136a18162cd07b7738673bc4c27f5c71ec"
+dependencies = [
+ "crossbeam-utils",
+ "log",
+ "memchr",
+ "mio",
  "proc-macro2",
  "quote",
+ "regex",
  "regex-automata",
  "regex-syntax",
+ "serde",
  "serde_core",
  "smallvec",
  "syn",
  "tokio",
- "toml_datetime",
- "toml_parser",
  "tracing-core",
- "transport_core",
  "windows-sys 0.61.2",
- "winnow",
 ]
 
 [[package]]
