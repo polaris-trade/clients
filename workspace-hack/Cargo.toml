@@ -15,11 +15,11 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
-observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-core-v0.2.0", default-features = false, features = ["flush-tokio"] }
+observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.2", default-features = false, features = ["flush-tokio"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
 toml_datetime = { version = "1", features = ["serde"] }
 toml_parser = { version = "1" }
-transport_core = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.1", features = ["observability"] }
+transport_core = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.2", features = ["observability"] }
 winnow = { version = "1" }
 
 [build-dependencies]

@@ -301,7 +301,11 @@ impl<T: DatagramSource> MoldUdpReceiver<T> {
         if gaps.is_empty() {
             return Ok(0);
         }
-        emitter.emit(&gaps, session, transport).await
+        let sent = emitter.emit(&gaps, session, transport).await?;
+        if sent > 0 {
+            tracing::debug!(sent, "gap re-requests sent");
+        }
+        Ok(sent)
     }
 
     /// Resolve an `Inline` item's bytes against whichever of
@@ -495,6 +499,11 @@ impl<T: DatagramSource + AsyncReady> MoldUdpReceiver<T> {
         if next_expected > expected {
             self.gap_handler
                 .record_missing_range(expected, next_expected);
+            tracing::warn!(
+                expected,
+                next_expected,
+                "sequence gap detected; queueing re-request"
+            );
             self.ready.push_back(ReadyItem::Gap);
             record_gap();
         }

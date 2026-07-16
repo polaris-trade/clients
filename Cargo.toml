@@ -12,8 +12,8 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Shared runtime deps. One pin here covers every member; a bump is one edit.
-transport_core = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.1" }
-observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-core-v0.2.0", features = [
+transport_core = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.2" }
+observability-core = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.2", features = [
   "flush-tokio",
 ] }
 metrics = "0.24"
@@ -22,10 +22,12 @@ serde = { version = "1.0.228", features = ["derive"] }
 humantime-serde = "1.1.1"
 thiserror = "2.0.18"
 parking_lot = "0.12.5"
+tracing = "0.1"
+bitvec = "1.1.1"
 
 # Shared dev deps.
-transport_tokio = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.1" }
-observability = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.0" }
+transport_tokio = { git = "https://github.com/polaris-trade/transports", tag = "transport_tokio-v0.4.2" }
+observability = { git = "https://github.com/polaris-trade/observability", tag = "observability-v0.2.2" }
 mockall = "0.15"
 rstest = "0.26.1"
 # tokio default feature set is empty; each member selects its own features.

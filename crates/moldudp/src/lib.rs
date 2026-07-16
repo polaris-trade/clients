@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 //! MoldUDP64 client crate: wire codec, `SequenceReassembler`, `GapRequestHandler`,
 //! `AbArbiter`, `MoldUdpReceiver`.
 //!
