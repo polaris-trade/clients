@@ -61,6 +61,10 @@ MSRV 1.96.1.
 client_soupbintcp = { git = "https://github.com/polaris-trade/client-soupbintcp", tag = "client_soupbintcp-v0.2.0" }
 ```
 
+## Logging
+
+This crate emits [`tracing`](https://docs.rs/tracing) events on error and lifecycle paths (never per message). Install any subscriber to see them, e.g. `tracing_subscriber::fmt::init()`. Filter per crate with `RUST_LOG=client_soupbintcp=debug`. Disable at compile time with `tracing`'s `release_max_level_off` feature in your binary.
+
 ## License
 
 Dual-licensed under either [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.
