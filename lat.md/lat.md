@@ -6,3 +6,4 @@ Two protocol-client crates in one Cargo workspace, both backend-generic over `tr
 
 - [[moldudp]]: MoldUDP64 wire codec, sequence reassembler, gap re-request, A/B arbiter, and a `DatagramSource`-generic receiver.
 - [[soupbintcp]]: SoupBinTCP v3.0 wire codec, session state machine, heartbeats, end-of-session, and the optional compressed variant.
+- [[fuzz]]: cargo-fuzz workspace with libFuzzer targets over both crates' framing surfaces, plus corpus policy for this public repo.
