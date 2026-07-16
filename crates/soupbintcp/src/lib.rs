@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 //! SoupBinTCP v3.0 client crate: wire codec, `SoupBinClient` state machine, heartbeats, `compressed` feature.
 //!
 //! Generic over `transport_core::StreamSource`; `AsyncReady` is optional, gating
