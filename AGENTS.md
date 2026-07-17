@@ -170,6 +170,53 @@ CODE COMMENT AUDIT (MANDATORY):
 Flag every REQ-*, TASK-*, AC-*, Phase N, milestone Y, work unit N, and em dash (—) found in code comments. Any hit = NEEDS_REVISION.
 ```
 
+# Logging Rules (MANDATORY: libraries emit, binaries subscribe)
+
+Every crate logs through the [`tracing`](https://docs.rs/tracing) facade. Libraries emit events; only binaries install a subscriber. No `println!`/`eprintln!` in library code.
+
+## Level semantics
+
+| Level | Use for |
+| ----- | ------- |
+| `error` | an operation failed and the caller loses data or a connection; a human should look |
+| `warn`  | degraded but continuing: a recoverable fault, a fallback taken, a gap detected |
+| `info`  | coarse lifecycle: session start/end, reconnect, config resolved. Not per message |
+| `debug` | detailed flow for diagnosis: re-request ticks, retry cadence, state transitions |
+| `trace` | firehose, per item; off in every normal build |
+
+## Libraries
+
+- Emit `tracing::{error,warn,info,debug,trace}!` events only. Never install a subscriber.
+- No spans on the hot path: a span allocates and takes a dispatcher lock even when no subscriber is attached. Use plain events.
+- No per-message events. Log state transitions (gap detected, reconnect, session end), never once per packet/row/message. A per-message event floods and defeats filtering.
+- Prefer structured fields over interpolation: `tracing::warn!(stream, %err, "...")`, not a preformatted string. Fields are filterable and become OTLP attributes for free.
+- Depend on `tracing` unconditionally when the crate has something to log. Pure-decode crates that never log add no dependency.
+
+## Binaries
+
+- Install exactly one subscriber, once, at startup, before any work begins.
+- Honor `RUST_LOG`. A binary with an observability pipeline routes through it; a plain binary installs a `tracing_subscriber::fmt` subscriber on stderr with an env filter defaulting to `warn`.
+- Consumers of this workspace's libraries install their own subscriber; the libraries stay silent until they do (standard Rust).
+
+## Lint enforcement
+
+Every library crate root (`lib.rs`) carries, as its first inner attribute:
+
+```rust
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+```
+
+The `cfg_attr(not(test), ...)` form leaves unit-test code free to print. Restriction lints are off by default, so this attribute is what enables the ban; lefthook `pre-commit` and CI `-D warnings` then enforce it. Binaries, examples, benches, and integration tests are separate targets and are unaffected.
+
+## Sanctioned print exceptions
+
+`println!`/`eprintln!` are allowed only in:
+
+- binary CLI product output (`main.rs` and its bin-target modules), the program's actual stdout product;
+- a binary's pre-subscriber-init usage or fatal-startup `eprintln!` (before any subscriber exists);
+- `build.rs` `cargo:` directives;
+- the observability crate's own pre-subscriber-init stderr notices (it cannot log through a subscriber it has not installed yet).
+
 # Post-Task Checklist (MANDATORY — ALL AGENTS, RUN BEFORE REPORTING DONE)
 
 1. `cargo test --workspace --no-fail-fast` — must pass
@@ -213,3 +260,33 @@ When writing new tests:
 4. Document in test comments when `--ignored` flag is required.
 5. **Test behavior, not language features** — do not write tests that verify language semantics (`Option::is_some()`, type casts, serde deserialization, default trait values). Tests should verify project-specific business logic.
 
+
+---
+
+# Code Growth Discipline (MANDATORY pre-write gate)
+
+Workspace-wide standard (mirrors root AGENTS.md and the operator's global config). Apply before writing, not during review.
+
+- New code: sketch module layout first. One concern per file; name the seam (trait impl, venue/channel, config vs logic). Projected >600 non-test LOC or a second concern: start as mod dir, never "split later".
+- Feature work: if the result would be too coupled or push a file past ~800 non-test LOC, land a split-first refactor commit (pure moves + `pub use` re-exports, gates green, zero behavior diff), then implement. Two commits, never one mixed.
+- Cohesive single impl block: fine at any size. Trigger is mixed concerns, not LOC.
+- Test mod >40% of file: sibling `tests.rs`.
+- Split mechanics: inherent impls split across files freely; one trait impl per file; child modules see parent-private fields, siblings need `pub(super)`; move by exact line-range extraction, never retype, never uniform-dedent (raw-string fixtures corrupt silently); keep external paths via `pub use`.
+- Hot-path inline: a new concrete (non-generic) fn on a per-message/per-record path reachable across a git-dep boundary gets `#[inline]` at write time. Generic fns: nothing, MIR export covers them. `#[inline(always)]`: only with a measured delta cited.
+- Validation honesty: a gate must compile the code it claims to validate. Feature-gated modules get `--features` in every validation command, spec, and CI caller.
+
+# Useless Test Ban (MANDATORY)
+
+A test must be able to fail from a project bug. Never write:
+
+- Derive/stdlib restatement: thiserror `#[error]` string equality, `#[derive(Default)]` variant choice, `#[from]` conversion in isolation, derived Clone/Debug/Eq works, plain serde roundtrip with no custom impl, `Option::is_some` after `Some`.
+- Field echo: constructor-stores-argument, struct-literal readback, a constant restated from the definition.
+- Duplicate coverage: the branch is already covered; name the covering test and skip.
+- Mock-call-count-only asserts with no observable output checked.
+- False confidence: assertion weaker than the test name claims. Verify the actual contract via readback, or delete.
+- Copy-pasted test doubles/encoders: they live once in `tests/support/`, per crate.
+- Per-impl re-proof of a generic contract: one `assert_contract<T: Trait>` helper, called per implementation.
+
+Keep (contract gates, not useless): wire/on-disk layout pins (size, alignment, discriminant, padding, format magic), codegen drift gates, determinism/replay gates, `Display` tests with a documented ops/log-matching rationale.
+
+Review rule: any new test matching a banned class = NEEDS_REVISION. Relay packets for test-writing subagents must include this ban list.

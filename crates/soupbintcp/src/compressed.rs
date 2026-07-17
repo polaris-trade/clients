@@ -12,13 +12,22 @@ use crate::error::SoupBinError;
 pub struct CompressedReader {
     inflator: Decompress,
     inflated: BytesMut,
+    // hard cap on one feed's inflated output; a zlib bomb hits this instead of
+    // growing scratch without bound. sized from the client decode budget.
+    max_inflated: usize,
 }
 
 impl CompressedReader {
+    /// `inflated_capacity` is both the starting buffer size and the hard ceiling
+    /// on one `feed`'s output. An inflate that exceeds it errors rather than
+    /// allocating without bound, so a hostile or corrupt zlib stream cannot
+    /// exhaust memory. Raise the client decode-buffer config if legitimate reads
+    /// ever need more headroom.
     pub fn new(inflated_capacity: usize) -> Self {
         Self {
             inflator: Decompress::new(true), // zlib framing (header + adler32), not raw deflate
             inflated: BytesMut::with_capacity(inflated_capacity),
+            max_inflated: inflated_capacity,
         }
     }
 
@@ -48,6 +57,12 @@ impl CompressedReader {
                 })?;
             let consumed = (self.inflator.total_in() - before_in) as usize;
             input = &input[consumed..];
+            if scratch.len() > self.max_inflated {
+                return Err(SoupBinError::FrameTooLarge {
+                    size: scratch.len(),
+                    max: self.max_inflated,
+                });
+            }
             if status == Status::StreamEnd || input.is_empty() {
                 break;
             }

@@ -9,11 +9,14 @@ jobs:
   rust:
     uses: polaris-trade/ci/.github/workflows/rust-ci.yml@main
 
-  # Second leg exercises soupbintcp's compressed + tokio features (and the
-  # recv_metrics example). Distinct concurrency-key so it does not share a
-  # group with the base job and cancel it.
+  # Powerset covers soupbintcp compressed/tokio combos: {}, compressed, tokio,
+  # both. Nextest line keeps cfg-gated integration tests (tests/compressed.rs,
+  # tests/managed.rs) running now the full-matrix leg is gone.
   rust-features:
-    uses: polaris-trade/ci/.github/workflows/rust-ci.yml@main
+    uses: polaris-trade/ci/.github/workflows/rust-features.yml@main
     with:
-      workspace-args: --all-features
-      concurrency-key: features
+      hack-args: -p client_soupbintcp --feature-powerset
+      extra-commands: |
+        cargo check --workspace --all-features --all-targets
+        cargo nextest run --workspace --all-features
+      install-nextest: true

@@ -26,6 +26,22 @@ fn zlib_roundtrip() {
     assert_eq!(inflated, &plaintext[..]);
 }
 
+// zlib bomb: a few compressed bytes inflate past the reader's ceiling. feed
+// must reject, not allocate the full expansion.
+#[test]
+fn inflate_bomb_rejected_at_cap() {
+    let bomb = zlib_compress(&vec![0u8; 1 << 20]); // 1 MiB of zeros, tiny compressed
+    assert!(bomb.len() < 4096, "highly compressible input stays small");
+
+    let mut reader = CompressedReader::new(256);
+    match reader.feed(&bomb) {
+        Err(client_soupbintcp::SoupBinError::FrameTooLarge { max, .. }) => {
+            assert_eq!(max, 256);
+        }
+        other => panic!("expected FrameTooLarge, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn upstream_stays_plain() {
     // send_unsequenced must write the plain U packet even with `compressed`

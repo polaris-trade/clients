@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/moldudp", "crates/soupbintcp", "workspace-hack"]
+# fuzz/ is a detached cargo-fuzz crate with its own [workspace] table.
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2024"

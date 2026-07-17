@@ -1,0 +1,23 @@
+name: audit
+
+# RustSec advisory scan against the committed Cargo.lock. Runs on lockfile
+# changes, daily to catch new advisories against an unchanged lockfile, and
+# on demand. Public repo, default github-hosted runner.
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+  schedule:
+    - cron: "10 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    uses: polaris-trade/ci/.github/workflows/rust-audit.yml@main
