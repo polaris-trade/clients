@@ -2,8 +2,9 @@ name: fuzz
 
 # Framing fuzz targets for the moldudp and soupbintcp wire codecs. check builds
 # and replays the committed corpus on PRs touching wire or fuzz sources
-# (required gate). discover runs time-bounded search nightly (advisory). Public
-# repo: GitHub-hosted Linux, free minutes.
+# (required gate). discover runs a time-bounded search only when wire or fuzz
+# code lands on main, plus manual dispatch (advisory) - no blind schedule.
+# Public repo: GitHub-hosted Linux, free minutes.
 
 on:
   pull_request:
@@ -11,8 +12,12 @@ on:
       - 'crates/moldudp/src/**'
       - 'crates/soupbintcp/src/**'
       - 'fuzz/**'
-  schedule:
-    - cron: '15 3 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/moldudp/src/**'
+      - 'crates/soupbintcp/src/**'
+      - 'fuzz/**'
   workflow_dispatch:
 
 jobs:
@@ -24,8 +29,7 @@ jobs:
       advisory: false
 
   discover:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     uses: polaris-trade/ci/.github/workflows/rust-fuzz.yml@main
     with:
       mode: discover
-      max-total-time: 900
