@@ -20,4 +20,4 @@ Oracle: both passes must produce the identical frame sequence, identical consume
 
 Hostile bytes into [[crates/soupbintcp/src/compressed.rs#CompressedReader#feed]] (feature `compressed`), split into two feeds so the persistent zlib inflate state carries across calls.
 
-Oracle: corrupt input returns a structured [[crates/soupbintcp/src/error.rs#SoupBinError]]; accepted input's total inflated output stays within deflate's 1032:1 maximum expansion bound. The crate itself documents no byte cap on `feed` output; the packet-size cap `max_frame_size` applies downstream in [[crates/soupbintcp/src/client.rs#SoupBinClient]].
+Oracle: corrupt input returns a structured [[crates/soupbintcp/src/error.rs#SoupBinError]]; every accepted feed's inflated output stays within the reader's hard cap (the capacity passed to `CompressedReader::new`). A zlib bomb hits `FrameTooLarge`, a structured error, rather than growing without bound.

@@ -54,6 +54,8 @@ Optional NASDAQ compressed-feed support: server-to-client bytes flow through a s
 
 Under the `compressed` feature, `CompressedReader` wraps the transport's read side with `Decompress::new(true)` (zlib framing, not raw deflate). Upstream writes (login, heartbeats, unsequenced data, logout) always bypass the inflator: compression is server-to-client only.
 
+`feed` caps one inflate's output at the capacity passed to `CompressedReader::new` (the client's `decode_buf_capacity`): a zlib bomb hits `SoupBinError::FrameTooLarge` instead of growing without bound. Raise the config if legitimate reads need more headroom.
+
 See [[crates/soupbintcp/src/compressed.rs#CompressedReader]].
 
 ## Telemetry
