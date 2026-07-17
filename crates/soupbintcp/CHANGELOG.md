@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.7.0](https://github.com/polaris-trade/clients/compare/client_soupbintcp-v0.6.0...client_soupbintcp-v0.7.0) (2026-07-17)
+
+
+### Features
+
+* **clients:** code clean up ([#8](https://github.com/polaris-trade/clients/issues/8)) ([13d695f](https://github.com/polaris-trade/clients/commit/13d695f2f9ed64349234cca1a2ae5e303a666834))
+
 ## [0.6.0](https://github.com/polaris-trade/clients/compare/client_soupbintcp-v0.5.1...client_soupbintcp-v0.6.0) (2026-07-16)
 
 
