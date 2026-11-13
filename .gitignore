@@ -35,8 +35,9 @@ perf.data*
 # release-plz work dir
 .release-plz/
 
-# lat.md caches (if any land at repo root)
+# lat.md caches
 .lat/
+lat.md/.cache/
 
 # Generated crates hakari workspace-hack (opt-in; uncomment if you enable hakari later)
 # workspace-hack/
