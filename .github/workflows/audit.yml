@@ -20,4 +20,4 @@ on:
 
 jobs:
   audit:
-    uses: polaris-trade/ci/.github/workflows/rust-audit.yml@main
+    uses: 0x67/ci/.github/workflows/rust-audit.yml@main
